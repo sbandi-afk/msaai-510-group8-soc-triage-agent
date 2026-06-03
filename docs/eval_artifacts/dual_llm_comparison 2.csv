@@ -1,0 +1,7 @@
+scenario,slot,model,provider,decision,tactic,technique_id,confidence,priority,severity,latency_ms
+credential_access_ws5,model_a,databricks-meta-llama-3-1-70b-instruct,mock,escalated,Credential Access,T1110,0.85,3,MEDIUM,1006.4
+credential_access_ws5,model_b,databricks-dbrx-instruct,mock,escalated,Credential Access,T1110,0.78,3,MEDIUM,968.7
+execution_powershell_ws6,model_a,databricks-meta-llama-3-1-70b-instruct,mock,escalated,Execution,T1059,0.82,5,CRITICAL,989.1
+execution_powershell_ws6,model_b,databricks-dbrx-instruct,mock,escalated,Execution,T1059,0.75,5,CRITICAL,974.7
+persistence_service_filesrv1,model_a,databricks-meta-llama-3-1-70b-instruct,mock,escalated,Persistence,T1543,0.88,4,HIGH,986.9
+persistence_service_filesrv1,model_b,databricks-dbrx-instruct,mock,escalated,Persistence,T1543,0.81,4,HIGH,989.8

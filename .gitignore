@@ -1,0 +1,16 @@
+_working/
+mlruns/
+.venv/
+venv/
+__pycache__/
+*.pyc
+.env
+.secrets
+.databrickscfg
+*.egg-info/
+dist/
+build/
+.ipynb_checkpoints/
+.pixi/
+
+.databricks

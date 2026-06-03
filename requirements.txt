@@ -1,0 +1,40 @@
+# SOC Triage Agent — local Python dependencies (Marston Ward, AIE / Team Lead)
+#
+# These are the deps actually used by src/soc_agent and the notebooks, pinned to
+# the versions verified to run end-to-end in MOCK_MODE on Python 3.12–3.14.
+# They mirror the team's pinned stack in agentic_ai_systems_aai-510/team_project/pixi.toml.
+#
+# Install:  python -m pip install -r requirements.txt
+# (See docs/SETUP.md for the pixi alternative and the Databricks kernel setup.)
+
+# --- agent orchestration (LangGraph ReAct) ---
+langgraph==1.2.2
+langchain==1.3.2
+langchain-core==1.4.0
+langchain-openai==1.2.2
+langchain-community==0.3.31
+
+# --- LLM client (OpenAI-compatible; points at Databricks Model Serving) ---
+openai==2.40.0
+
+# --- experiment tracking / tracing ---
+mlflow==3.12.0
+
+# --- Databricks access (live mode; SDK Statement Execution API) ---
+databricks-sdk==0.114.0
+# Optional, for Spark via databricks-connect — install in a SEPARATE env matched
+# to your cluster's DBR version (it pins an older numpy that conflicts with
+# langchain-community). See docs/SETUP.md.
+#   databricks-connect>=14,<15
+
+# --- HTTP + config ---
+requests==2.34.2
+python-dotenv==1.2.2
+
+# --- data / notebooks ---
+pandas==2.3.3
+numpy>=2.1.0
+ipykernel==7.2.0
+nbformat==5.10.4
+nbclient==0.10.4
+nbconvert==7.17.1

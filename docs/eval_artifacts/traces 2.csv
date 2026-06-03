@@ -1,0 +1,6 @@
+scenario,expect,decision,tactic,technique_id,confidence,priority,severity,z_score,iterations,latency_ms,incident_written
+credential_access_ws5,escalate,escalated,Credential Access,T1110,0.85,3.0,MEDIUM,3.82,4,356.4,True
+execution_powershell_ws6,escalate,escalated,Execution,T1059,0.82,5.0,CRITICAL,4.51,4,522.1,True
+persistence_service_filesrv1,escalate,escalated,Persistence,T1543,0.88,4.0,HIGH,3.1,4,160.9,True
+out_of_scope_weather,reject,rejected,,,,,,,0,1.2,False
+out_of_scope_recipe,reject,rejected,,,,,,,0,1.0,False

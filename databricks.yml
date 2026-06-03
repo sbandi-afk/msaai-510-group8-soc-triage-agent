@@ -1,0 +1,48 @@
+# Databricks Asset Bundle configuration
+# Run: databricks bundle deploy   -- to sync notebooks to workspace
+# Run: databricks bundle run      -- to execute a job
+bundle:
+  name: soc_triage_agent
+
+workspace:
+  host: ${workspace.host}
+  # Set via: databricks configure --token
+  # Or set DATABRICKS_HOST and DATABRICKS_TOKEN env vars
+
+targets:
+  dev:
+    mode: development
+    workspace:
+      root_path: /Users/${workspace.current_user.userName}/soc_triage_agent_dev
+
+  prod:
+    workspace:
+      root_path: /Users/${workspace.current_user.userName}/soc_triage_agent
+
+resources:
+  jobs:
+    soc_etl_pipeline:
+      name: "SOC ETL Pipeline"
+      tasks:
+        - task_key: etl
+          notebook_task:
+            notebook_path: ./soc_etl_pipeline.ipynb
+            base_parameters: {}
+          existing_cluster_id: ${var.cluster_id}
+
+    soc_agent:
+      name: "SOC Agent Evaluation"
+      tasks:
+        - task_key: agent
+          notebook_task:
+            notebook_path: ./soc_agent.ipynb
+            base_parameters: {}
+          existing_cluster_id: ${var.cluster_id}
+          depends_on:
+            - task_key: etl
+          # Note: agent job depends on ETL completing first
+
+variables:
+  cluster_id:
+    description: "Databricks cluster ID to run notebooks on"
+    default: "YOUR_CLUSTER_ID"
