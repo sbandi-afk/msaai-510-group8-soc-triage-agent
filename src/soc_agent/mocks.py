@@ -72,6 +72,20 @@ SAMPLE_EVENTS: List[Dict[str, Any]] = [
         "event_type": "Security",
         "event_ts": "2026-05-31T09:55:10Z",
     },
+    # SAMPLE_EVENTS[5] — ambiguous EventID (7045, Service installed) from a
+    # legacy server.  mock_classify_threat returns tactic="unknown" because
+    # EventID 7045 is outside the rule-engine's trained set.  Combined with a
+    # high z-score (3.5) this triggers the MANUAL_REVIEW branch in
+    # classify_and_ticket, exercising the human-escalation path.
+    {
+        "EventID": 7045,
+        "host_ip": "LEGACY_SRV1",
+        "user_id": "SYSTEM",
+        "ProcessName": "services.exe",
+        "CommandLine": "C:\\Windows\\System32\\services.exe",
+        "event_type": "System",
+        "event_ts": "2026-05-31T11:30:00Z",
+    },
 ]
 
 # z-scores keyed by host so anomalous hosts cross the 2.5 threshold and a
@@ -81,7 +95,8 @@ _MOCK_ZSCORES: Dict[str, float] = {
     "WORKSTATION6": 4.51,
     "FILESRV1": 3.10,
     "DC01": 2.95,
-    "WORKSTATION2": 0.61,   # benign — should NOT escalate
+    "WORKSTATION2": 0.61,    # benign — should NOT escalate
+    "LEGACY_SRV1": 3.50,     # high anomaly but unclassifiable tactic → MANUAL_REVIEW
 }
 
 
@@ -119,7 +134,7 @@ def mock_score_anomaly(p_host_ip: str, p_window_min: int = 60) -> List[Dict[str,
 def mock_get_exposed_assets() -> List[Dict[str, Any]]:
     """Mock of TABLE-VALUED ``gold.get_exposed_assets()`` (no args)."""
     rows = []
-    for host in ["WORKSTATION5", "WORKSTATION6", "FILESRV1", "DC01", "WORKSTATION2"]:
+    for host in ["WORKSTATION5", "WORKSTATION6", "FILESRV1", "DC01", "WORKSTATION2", "LEGACY_SRV1"]:
         up = host.upper()
         if "DC" in up:
             flag = "Domain Controller -- high value target"
@@ -194,6 +209,7 @@ def mock_shodan(ip_or_host: str) -> Dict[str, Any]:
         "FILESRV1": {"ports": [445, 3389, 139], "banners": ["SMB", "RDP", "NetBIOS"]},
         "DC01": {"ports": [88, 389, 636, 445], "banners": ["Kerberos", "LDAP", "LDAPS", "SMB"]},
         "WORKSTATION6": {"ports": [3389], "banners": ["RDP"]},
+        "LEGACY_SRV1": {"ports": [135, 445, 5985], "banners": ["RPC", "SMB", "WinRM"]},
     }
     info = catalog.get(ip_or_host, {"ports": [], "banners": []})
     return {
@@ -265,6 +281,24 @@ def mock_classify_and_ticket_completion(context: Dict[str, Any], model: str) -> 
     z = float(context.get("z_score", 0.0) or 0.0)
     rep = context.get("reputation", {}) or {}
     malicious = int(rep.get("malicious", 0) or 0)
+
+    # If the rule engine cannot classify the tactic but the anomaly score is
+    # elevated, route to human review rather than silently dismissing.  This
+    # exercises the MANUAL_REVIEW branch in classify_and_ticket so the eval
+    # suite covers all three decision paths (escalated, dismissed, manual_review).
+    if base.get("tactic") == "unknown" and z >= 2.5:
+        return {
+            "tactic": "MANUAL_REVIEW",
+            "technique_id": "T0000",
+            "confidence": 0.0,
+            "priority": 3,
+            "severity": "HIGH",
+            "summary": (
+                f"[{model}] Unclassifiable tactic on {context.get('host_ip')} "
+                f"(z={z:.2f}, EventID unknown to rule engine). "
+                "Routed to manual analyst review."
+            ),
+        }
 
     # Priority heuristic 1-5.
     priority = 1
