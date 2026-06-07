@@ -31,27 +31,51 @@ The agent follows the **ReAct** (Reasoning + Acting) pattern, interleaving chain
 
 ## Architecture
 
+End-to-end data lake → agent flow on Databricks (Unity Catalog `soc_intelligence`,
+medallion Bronze → Silver → Gold, serverless jobs):
+
 ```
-┌─────────────────────────────────────────────────────────┐
-│                   LangGraph ReAct Agent                 │
-│                                                         │
-│   Observe ──► Reason ──► Act ──► Observe ──► ...        │
-│                          │                              │
-│               ┌──────────┴──────────┐                   │
-│               ▼                     ▼                   │
-│         UC SQL Functions      External APIs             │
-│  ┌──────────────────────┐  ┌─────────────────────┐      │
-│  │ score_anomaly()      │  │ check_ip_reputation()│     │
-│  │ get_cve_context()    │  │ lookup_exposed_ports()│    │
-│  │ classify_threat()    │  └─────────────────────┘      │
-│  │ get_exposed_assets() │                               │
-│  └──────────────────────┘                               │
-│               │                                         │
-│               ▼                                         │
-│      classify_and_ticket()                              │
-│      (Python UC + LLM → MITRE-labeled ticket)           │
-└─────────────────────────────────────────────────────────┘
+ DATA SOURCES            BRONZE (raw)          SILVER (normalized)        GOLD (computed)
+┌──────────────┐       ┌──────────────┐      ┌────────────────────┐    ┌──────────────────┐
+│ OTRF GitHub  │──┐    │ siem_raw_    │      │ siem_normalized    │    │ UC FUNCTIONS     │
+│ (7 tactics)  │  ├───►│   event      │─────►│ host               │───►│ score_anomaly()  │
+│ mock_event_  │──┘    │ (append)     │ ETL  │ user_account       │    │ classify_threat()│
+│   injector   │       └──────────────┘ incr └────────────────────┘    │ get_exposed_     │
+└──────────────┘        every 1 min     2min       every 2 min          │   assets()       │
+                                                                        └────────┬─────────┘
+                                                                                 │ reads
+┌────────────────────────────────────────────────────────────────────────────── ▼ ──────────┐
+│                       LangGraph ReAct Agent  (soc_agent_live, every 5 min)                  │
+│                                                                                            │
+│   scope_guard ──► reason ⇄ act  (ReAct loop) ──► classify_and_ticket ──► write_incident    │
+│                            │                            │                                  │
+│            ┌───────────────┼────────────────┐          ▼                                   │
+│            ▼               ▼                ▼     dual LLM (A: temp 0.0 writes,             │
+│   ┌─────────────────┐ ┌──────────────┐ ┌─────────┐    B: temp 0.5 compare) + MLflow        │
+│   │ GOLD UC SQL fns │ │ GOVERNED UC  │ │  NVD     │                                         │
+│   │ score_anomaly() │ │ HTTP fns:    │ │ (direct  │                                         │
+│   └─────────────────┘ │ check_ip_    │ │  REST)   │                                         │
+│                       │  reputation()│ └─────────┘                                          │
+│                       │ lookup_      │      get_cve_context()                               │
+│                       │  exposed_    │                                                      │
+│                       │  ports()     │                                                      │
+│                       └──────┬───────┘                                                      │
+└──────────────────────────────┼─────────────────────────────────────────────────────────────┘
+                               │ http_request() over UC HTTP connections (SECRET keys)
+                               ▼
+                    ┌────────────────────┐
+                    │ AbuseIPDB · Shodan │   (host-locked, auditable)
+                    └────────────────────┘
+
+                    GOLD outputs:  incident  ──►  incident_eval
+                                   (tickets)      (quality grades + MLflow, every 5 min)
 ```
+
+> **Note on enrichment.** `check_ip_reputation` and `lookup_exposed_ports` are now
+> **governed UC SQL functions** using `http_request()` over Unity Catalog HTTP
+> connections (a UC *Python* UDF cannot reach the internet). `get_cve_context`
+> remains a direct keyless NVD REST call inside the agent. The local MOCK_MODE
+> path (`src/soc_agent/`) keeps the original VirusTotal/Shodan Python wrappers.
 
 ### Notebook Pipeline
 
@@ -202,17 +226,25 @@ whole comparison offline.
 
 ### Data Pipeline (Sai Bandi — DE) ✅ Complete
 
-Medallion architecture ETL pipeline delivering production-ready analytics tables:
+Medallion architecture ETL pipeline delivering production-ready analytics tables,
+now fully **deployed and scheduled on Databricks serverless** (see
+[Data Lake Architecture](#data-lake-architecture) and [Jobs & Scheduling](#jobs--scheduling)).
 
-- **Bronze → Silver → Gold** transformation pipeline
+- **Bronze → Silver → Gold** transformation pipeline, self-downloads OTRF data from GitHub
 - Ingests OTRF Security Datasets covering **7 MITRE ATT&CK tactics**
 - **51,400 raw events → 40,833 normalized rows** across 10 hosts and 44 user accounts
-- Three Gold-layer Unity Catalog functions deployed:
-  - `score_anomaly()` — z-score anomaly detection
-  - `classify_threat()` — MITRE ATT&CK rule-based classification
-  - `get_exposed_assets()` — host-level risk assessment
+- **Incremental silver normalization** — watermark-based, only processes new bronze rows
+- **Five Gold-layer Unity Catalog functions** deployed:
+  - `score_anomaly()` — SQL TVF, z-score anomaly detection
+  - `classify_threat()` — Python UDF, MITRE ATT&CK rule-based classification
+  - `get_exposed_assets()` — SQL TVF, host-level risk assessment
+  - `check_ip_reputation()` — **SQL + `http_request()`**, AbuseIPDB via governed HTTP connection
+  - `lookup_exposed_ports()` — **SQL + `http_request()`**, Shodan via governed HTTP connection
+- **Governed external access** — UC HTTP connections (`abuseipdb_http`, `shodan_http`),
+  host-locked and auditable; API keys injected at query time via `SECRET()` (never in code)
 - Unity Catalog: `soc_intelligence` catalog with `bronze`, `silver`, and `gold` schemas
-- Implementation: `soc_etl_pipeline.ipynb`
+- **Infrastructure-as-code**: `databricks/setup_infrastructure` (idempotent bootstrap) +
+  `databricks/deploy_jobs` (creates + schedules all jobs from a fresh git checkout)
 
 ### Agent Definition (Marston Ward — AIE) ✅ Complete
 
@@ -270,14 +302,128 @@ summary: **[`docs/aie_writeup.md`](docs/aie_writeup.md)**.
 - ROI calculation for automated triage vs. manual analyst workflow
 - Build-vs-buy justification for NovaPay Financial
 
+---
+
+## Data Lake Architecture
+
+Unity Catalog `soc_intelligence`, medallion (Bronze → Silver → Gold), all on
+Databricks **serverless** (no classic clusters available in this workspace).
+
+```
+soc_intelligence  (Unity Catalog)
+│
+├── bronze/                                      RAW -- append only
+│   ├── siem_raw_event        OTRF JSON + mock events (original field names, @timestamp)
+│   └── otrf_raw  (Volume)     downloaded OTRF ZIP files
+│
+├── silver/                                      NORMALIZED -- incremental (watermark)
+│   ├── siem_normalized       filtered to 13 priority EventIDs, standardized columns
+│   ├── host                   asset inventory (distinct hosts)
+│   └── user_account           identities from logon/creation events (4624/4720)
+│
+└── gold/                                        COMPUTED
+    ├── score_anomaly()        SQL TVF   -- z-score vs 24h rolling baseline
+    ├── classify_threat()      Python UDF-- EventID/process -> MITRE tactic
+    ├── get_exposed_assets()   SQL TVF   -- host risk flags
+    ├── check_ip_reputation()  SQL+HTTP  -- AbuseIPDB via abuseipdb_http connection
+    ├── lookup_exposed_ports() SQL+HTTP  -- Shodan via shodan_http connection
+    ├── incident               Delta     -- agent-generated ATT&CK-labeled tickets
+    └── incident_eval          Delta     -- automated quality grades for incidents
+```
+
+### Governed external access (AbuseIPDB / Shodan)
+
+Network egress from a Unity Catalog **Python UDF is sandboxed** (no outbound
+internet). The threat-intel lookups are therefore implemented as **SQL functions**
+that call the built-in `http_request()` over UC **HTTP connections**:
+
+```
+CREATE CONNECTION abuseipdb_http TYPE HTTP OPTIONS (host 'https://api.abuseipdb.com', ...)
+CREATE CONNECTION shodan_http    TYPE HTTP OPTIONS (host 'https://api.shodan.io',   ...)
+
+CREATE FUNCTION gold.check_ip_reputation(ip STRING) RETURNS STRING
+  RETURN http_request(conn => 'abuseipdb_http', ...,
+                      headers => map('Key', SECRET('mcp-keys','abuseipdb-key'), ...)).text
+```
+
+- **Host-locked & auditable** — each connection can only reach its one allowed host
+- **No keys in code** — injected at query time via `SECRET('mcp-keys', ...)`
+- **Callable anywhere** — SQL, notebooks, or the agent
+
+> Note: this uses Databricks `CREATE CONNECTION TYPE HTTP` + `http_request()` —
+> NOT `CREATE NETWORK ACCESS CONFIGURATION` / `CREATE EXTERNAL ACCESS INTEGRATION`,
+> which are not valid SQL DDL in this workspace.
+
+---
+
+## Jobs & Scheduling
+
+All jobs run on **serverless** compute and are provisioned by
+`databricks/deploy_jobs` (idempotent, self-locating).
+
+| Job | Trigger | Notebook | Role |
+|-----|---------|----------|------|
+| `setup_infrastructure` | **ON-DEMAND** | `databricks/setup_infrastructure` | One-time bootstrap: catalog, schemas, volume, UC functions, HTTP connections, tables |
+| `mock_event_injector_v2` | every **1 min** | `databricks/mock_event_injector` | Generate synthetic SIEM events → `bronze.siem_raw_event` |
+| `soc_etl_pipeline_v2` | every **2 min** | `databricks/soc_etl_pipeline` | Incremental Bronze → Silver normalization |
+| `soc_agent_live` | every **5 min** | `databricks/soc_agent_live` | LangGraph agent + dual LLM + MLflow + governed enrichment → `gold.incident` |
+| `incident_eval_agent_v2` | every **5 min +30s** | `databricks/incident_eval_agent` | Quality grading + MLflow summary → `gold.incident_eval` |
+
+```
+every 1 min   mock_event_injector  ──►  bronze.siem_raw_event
+every 2 min   soc_etl_pipeline     ──►  silver.* (watermark incremental)
+every 5 min   soc_agent_live       ──►  score_anomaly → enrich (AbuseIPDB/Shodan/NVD)
+                                         → classify (LLM) → gold.incident   + MLflow run
+every 5 min   incident_eval_agent  ──►  gold.incident_eval  + MLflow summary
+```
+
+> `mock_event_injector` is test-only — in production you would remove it and point
+> the ETL at a real SIEM feed.
+
+---
+
+## Databricks Deployment (reproduce from a fresh git checkout)
+
+The operational notebooks live under `databricks/` as `.py` files (the
+`# Databricks notebook source` header makes Git folders render them as notebooks).
+
+1. **Clone the repo** into Databricks via **Repos / Git folders**
+2. **Add API keys** to secrets (one-time):
+   ```bash
+   databricks secrets create-scope mcp-keys
+   databricks secrets put-secret  mcp-keys abuseipdb-key
+   databricks secrets put-secret  mcp-keys shodan-key
+   ```
+3. Open **`databricks/setup_infrastructure`** → **Run All**
+   (catalog, schemas, volume, 5 UC functions, 2 HTTP connections, tables)
+4. Open **`databricks/deploy_jobs`** → **Run All**
+   (creates + schedules all 5 jobs, pointing at *your* checkout location)
+
+`deploy_jobs` detects its own path, so the jobs always point at the notebooks in
+whoever's checkout — no hardcoded paths. Re-running it updates jobs in place
+(idempotent, never duplicates). To rebuild everything from scratch:
+`DROP CATALOG soc_intelligence CASCADE;` then repeat steps 3–4.
+
+> A local-admin alternative, `deploy_jobs.ps1` (PowerShell + REST), is also
+> included for driving deployment from a workstation with a `.databrickscfg`.
+
 ## Repository Structure
 
 ```
-notebooks/
-  03_agent_loop.ipynb             ← Marston (AIE)  — StateGraph ReAct agent
-  04_api_clients.ipynb            ← Marston (AIE)  — VirusTotal / Shodan / NVD
-  05_evaluation.ipynb             ← Marston (AIE)  — MLflow traces + dual-LLM
-  00_run_all.ipynb                ← Marston (AIE)  — integration entry point
+databricks/                       ← Sai (DE) — runs ON Databricks (serverless jobs)
+  setup_infrastructure.py           catalog/schemas/volume + 5 UC fns + 2 HTTP connections + tables
+  mock_event_injector.py            synthetic SIEM events → bronze (test-only)
+  soc_etl_pipeline.py               incremental bronze → silver normalization
+  soc_agent_live.py                 LangGraph + dual LLM + MLflow + governed enrichment (live)
+  incident_eval_agent.py            incident quality grading + MLflow summary
+  deploy_jobs.py                    ⭐ creates + schedules all jobs (self-locating, idempotent)
+deploy_jobs.ps1                   ← local-admin alternative (PowerShell + REST)
+
+notebooks/                        ← Marston (AIE) — local Python, MOCK_MODE
+  03_agent_loop.ipynb               StateGraph ReAct agent
+  04_api_clients.ipynb              VirusTotal / Shodan / NVD
+  05_evaluation.ipynb               MLflow traces + dual-LLM
+  00_run_all.ipynb                  integration entry point
 src/
   soc_agent/                      ← reusable package imported by the notebooks
     config.py                       env-driven config + LLM selection
@@ -292,16 +438,18 @@ docs/
   aie_writeup.md                  ← AIE component summary for the team report
   eval_artifacts/                 ← trace + comparison CSVs (generated)
   business_case.md                ← Marquise (PM)
-soc_etl_pipeline.ipynb            ← Sai (DE) — bronze/silver/gold + UC functions
+soc_etl_pipeline.ipynb            ← Sai (DE) — original combined notebook (superseded by databricks/)
 requirements.txt                  ← local Python deps
 .env.example                      ← config template (copy to .env)
 proposal_cybersecurity_agent.pdf
 README.md
 ```
 
-> The DE pipeline currently ships as a single `soc_etl_pipeline.ipynb` (catalog/
-> schemas, bronze→silver→gold, and the `score_anomaly` / `classify_threat` /
-> `get_exposed_assets` UC functions + `gold.incident` table).
+> **Two execution modes, one codebase.** Marston's `notebooks/` + `src/soc_agent/`
+> run **locally in MOCK_MODE** (zero creds — for graders). The `databricks/` folder
+> is the **live, scheduled** deployment on Databricks serverless: same agent design
+> (LangGraph + dual LLM + MLflow), inlined into a single notebook with mock mode
+> removed and the threat-intel tools wired to governed UC HTTP connections.
 
 ## Live Evaluation Results
 
