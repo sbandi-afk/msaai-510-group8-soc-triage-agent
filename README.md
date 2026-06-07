@@ -31,27 +31,51 @@ The agent follows the **ReAct** (Reasoning + Acting) pattern, interleaving chain
 
 ## Architecture
 
+End-to-end data lake → agent flow on Databricks (Unity Catalog `soc_intelligence`,
+medallion Bronze → Silver → Gold, serverless jobs):
+
 ```
-┌─────────────────────────────────────────────────────────┐
-│                   LangGraph ReAct Agent                 │
-│                                                         │
-│   Observe ──► Reason ──► Act ──► Observe ──► ...        │
-│                          │                              │
-│               ┌──────────┴──────────┐                   │
-│               ▼                     ▼                   │
-│         UC SQL Functions      External APIs             │
-│  ┌──────────────────────┐  ┌─────────────────────┐      │
-│  │ score_anomaly()      │  │ check_ip_reputation()│     │
-│  │ get_cve_context()    │  │ lookup_exposed_ports()│    │
-│  │ classify_threat()    │  └─────────────────────┘      │
-│  │ get_exposed_assets() │                               │
-│  └──────────────────────┘                               │
-│               │                                         │
-│               ▼                                         │
-│      classify_and_ticket()                              │
-│      (Python UC + LLM → MITRE-labeled ticket)           │
-└─────────────────────────────────────────────────────────┘
+ DATA SOURCES            BRONZE (raw)          SILVER (normalized)        GOLD (computed)
+┌──────────────┐       ┌──────────────┐      ┌────────────────────┐    ┌──────────────────┐
+│ OTRF GitHub  │──┐    │ siem_raw_    │      │ siem_normalized    │    │ UC FUNCTIONS     │
+│ (7 tactics)  │  ├───►│   event      │─────►│ host               │───►│ score_anomaly()  │
+│ mock_event_  │──┘    │ (append)     │ ETL  │ user_account       │    │ classify_threat()│
+│   injector   │       └──────────────┘ incr └────────────────────┘    │ get_exposed_     │
+└──────────────┘        every 1 min     2min       every 2 min          │   assets()       │
+                                                                        └────────┬─────────┘
+                                                                                 │ reads
+┌────────────────────────────────────────────────────────────────────────────── ▼ ──────────┐
+│                       LangGraph ReAct Agent  (soc_agent_live, every 5 min)                  │
+│                                                                                            │
+│   scope_guard ──► reason ⇄ act  (ReAct loop) ──► classify_and_ticket ──► write_incident    │
+│                            │                            │                                  │
+│            ┌───────────────┼────────────────┐          ▼                                   │
+│            ▼               ▼                ▼     dual LLM (A: temp 0.0 writes,             │
+│   ┌─────────────────┐ ┌──────────────┐ ┌─────────┐    B: temp 0.5 compare) + MLflow        │
+│   │ GOLD UC SQL fns │ │ GOVERNED UC  │ │  NVD     │                                         │
+│   │ score_anomaly() │ │ HTTP fns:    │ │ (direct  │                                         │
+│   └─────────────────┘ │ check_ip_    │ │  REST)   │                                         │
+│                       │  reputation()│ └─────────┘                                          │
+│                       │ lookup_      │      get_cve_context()                               │
+│                       │  exposed_    │                                                      │
+│                       │  ports()     │                                                      │
+│                       └──────┬───────┘                                                      │
+└──────────────────────────────┼─────────────────────────────────────────────────────────────┘
+                               │ http_request() over UC HTTP connections (SECRET keys)
+                               ▼
+                    ┌────────────────────┐
+                    │ AbuseIPDB · Shodan │   (host-locked, auditable)
+                    └────────────────────┘
+
+                    GOLD outputs:  incident  ──►  incident_eval
+                                   (tickets)      (quality grades + MLflow, every 5 min)
 ```
+
+> **Note on enrichment.** `check_ip_reputation` and `lookup_exposed_ports` are now
+> **governed UC SQL functions** using `http_request()` over Unity Catalog HTTP
+> connections (a UC *Python* UDF cannot reach the internet). `get_cve_context`
+> remains a direct keyless NVD REST call inside the agent. The local MOCK_MODE
+> path (`src/soc_agent/`) keeps the original VirusTotal/Shodan Python wrappers.
 
 ### Notebook Pipeline
 
