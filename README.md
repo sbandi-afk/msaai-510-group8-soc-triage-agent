@@ -15,20 +15,29 @@ University of San Diego, MS Applied Artificial Intelligence
 
 ## Problem
 
-NovaPay Financial is a mid-sized U.S. payments processor whose Security Operations Center (SOC) faces an unsustainable alert workload. Each analyst manually reviews 30–50 alerts per shift, spending 30–45 minutes on repetitive IP lookups, CVE cross-references, and threat classification that a machine could handle in seconds. High-severity threats routinely get buried under routine noise, increasing mean time to detect (MTTD) and mean time to respond (MTTR).
+NovaPay Financial is a mid-sized U.S. payments processor that handles approximately $2.8 billion in annual transaction volume across more than 400 enterprise clients. Because NovaPay operates in the fintech and payments industry, security incidents create direct business risk. A delayed response to suspicious activity can affect customer trust, service availability, fraud exposure, and regulatory readiness.
+
+The company's Security Operations Center (SOC) depends on a small analyst team to manually review alerts. Analysts must correlate log entries, check threat intelligence, review vulnerability context, classify suspicious behavior, and write incident tickets. We estimate that analysts review about 30 to 50 alerts per shift, and each alert can take approximately 30 to 45 minutes to investigate.
+
+This creates a scaling problem. High-severity threats can be buried under routine alert noise, while analysts spend much of their time on repetitive lookup and documentation tasks instead of higher-value security judgment. The business problem is not only that triage is expensive; it is that slow or inconsistent triage increases mean time to detect (MTTD) and mean time to respond (MTTR). For a payments company, that delay can turn a manageable alert into a larger security, operational, or customer-impacting event.
 
 ## Solution
 
-An autonomous SOC triage agent that:
+The company will use an autonomous SOC triage agent for NovaPay Financial. The agent monitors SIEM-style event logs stored in Delta Lake, identifies suspicious activity, enriches the event with threat intelligence, classifies the behavior using MITRE ATT&CK, and generates an incident ticket for analyst review.
 
-1. **Monitors** SIEM event logs stored in Delta Lake for anomalous activity
-2. **Scores** each event against a rolling statistical baseline
-3. **Enriches** suspicious source IPs with external threat intelligence (VirusTotal, Shodan, NVD)
-4. **Classifies** threats using the MITRE ATT&CK framework
-5. **Generates** fully labeled incident tickets, ready for human analyst review
+the agent follows a ReAct-style design pattern. It reasons about the current alert, chooses a tool, observes the result, and then decides whether another tool call is needed before producing the final classification. The shipped implementation uses a concrete LangGraph `StateGraph` with explicit nodes for `scope_guard`, `reason`, `act`, and `classify_and_ticket`. This design makes the agent workflow more auditable than a black-box chatbot because the state, tool calls, and routing decisions are visible.
 
-The agent follows the **ReAct** (Reasoning + Acting) pattern, interleaving chain-of-thought reasoning with tool calls so every decision is traceable and auditable.
+The main tools include:
 
+- `score_anomaly()` for z-score anomaly detection against a host baseline.
+- `check_ip_reputation()` for VirusTotal-style reputation enrichment.
+- `lookup_exposed_ports()` for Shodan-style exposed-port and service-banner context.
+- `get_cve_context()` for NVD CVE enrichment.
+- `classify_and_ticket()` for MITRE ATT&CK classification and incident ticket generation.
+
+The final project also includes a scope guard that rejects out-of-scope requests before calling an LLM or tool. This matters because the agent should not behave like a general chatbot. It should stay focused on SOC triage tasks, such as anomaly scoring, host enrichment, CVE context, and MITRE ATT&CK incident ticketing. The implementation also includes a maximum tool iteration cap, structured JSON output enforcement, prompt-injection defenses, and a manual review fallback when classification is uncertain or invalid.
+
+Human analysts remain in the loop. The goal is not to replace SOC analysts or allow the agent to close high-risk incidents automatically. The purpose is to reduce repetitive front-end triage work so analysts can review better tickets, validate escalations, and make final security decisions faster.
 ## Architecture
 
 End-to-end data lake → agent flow on Databricks (Unity Catalog `soc_intelligence`,
