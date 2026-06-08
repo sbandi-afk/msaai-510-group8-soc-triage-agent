@@ -1,3 +1,8 @@
+<p align="center">
+  <img src="docs/images/novapay_logo.png" alt="NovaPay logo" width="800"/>
+</p>
+
+
 # SOC Triage Agent
 
 **AAI-510 Agentic AI Systems — Final Team Project**
