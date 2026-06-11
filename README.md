@@ -406,6 +406,45 @@ hh:25:30   incident_eval_agent  ──►  gold.incident_eval  + MLflow summary
 
 ---
 
+## Live demo (`demo_attack.py`)
+
+`demo_attack.py` (repo root) is a one-command, screen-recordable walkthrough that
+drives the **live** pipeline end-to-end without waiting for the hourly schedule. It
+simulates a credential brute-force, fires the agent, and reveals the graded incident.
+
+```bash
+python demo_attack.py            # full demo: inject → trigger → poll → reveal + eval
+python demo_attack.py --cleanup  # delete injected rows + the demo incident (repeatable)
+python demo_attack.py --host WS5 --events 50   # tune the attack
+```
+
+What it does:
+
+1. **Inject** ~50 failed-login events (Windows `EventID 4625`) for host `WS5` into
+   `silver.siem_normalized` (`_source='demo_attack'`, current-minute burst) via the
+   SQL Statements API on warehouse `d75aed5480a4cbe9`.
+2. **Trigger** the `soc_agent_live` job with `run-now`.
+3. **Poll** the run to a terminal state with a live status line (elapsed + state).
+4. **Reveal** the new `gold.incident` row (host, tactic, technique, severity, z,
+   confidence, model), then run `incident_eval_agent_v2` and print the grade from
+   `gold.incident_eval`. If no incident fires, it exits non-zero and prints the max
+   `score_anomaly()` z-score for the host as a diagnostic.
+
+**Why WS5 + a current-minute burst:** `gold.score_anomaly()` builds a *p90-capped*
+per-minute baseline over 24h. Injecting the whole burst into the current minute on an
+existing host (which already has an organic baseline) yields a measured **z ≈ 4.3** —
+clear of both the `z > 1.5` escalation gate and the eval's `z >= 2.5` check. WS5 also
+maps to a known-bad Tor exit node in the agent's `HOST_IP_MAP`, so AbuseIPDB returns a
+malicious verdict and the LLM classifies with high confidence (`> 0.7`).
+
+Config is read from `.env` (authoritative) or, as a fallback, the environment —
+`DATABRICKS_HOST`, `DATABRICKS_TOKEN`, `DATABRICKS_WAREHOUSE_ID`. Dependencies: stdlib
++ `requests` (already pinned in `requirements.txt`). The token is never printed.
+
+A typical run completes in ~2 minutes and ends with `QUALITY GRADE: A (score 1.00)`.
+
+---
+
 ## Databricks Deployment (reproduce from a fresh git checkout)
 
 The operational notebooks live under `databricks_src/` as `.py` files (the
