@@ -5,9 +5,7 @@ bundle:
   name: soc_triage_agent
 
 workspace:
-  host: ${workspace.host}
-  # Set via: databricks configure --token
-  # Or set DATABRICKS_HOST and DATABRICKS_TOKEN env vars
+  host: https://dbc-bea93efd-d23a.cloud.databricks.com
 
 targets:
   dev:

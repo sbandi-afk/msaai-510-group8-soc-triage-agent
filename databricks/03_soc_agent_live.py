@@ -12,7 +12,7 @@
 # MAGIC | Model B | `databricks-meta-llama-3-3-70b-instruct` temp=0.5 -- comparison only |
 # MAGIC | Tracing | MLflow -- one run per host, params + metrics + decision logged |
 # MAGIC | Tools | score_anomaly, check_ip_reputation, lookup_exposed_ports, get_cve_context |
-# MAGIC | Escalation | z_score > 2.5 AND confidence > 0.7 |
+# MAGIC | Escalation | z_score > 1.5 AND confidence > 0.7 (or MANUAL_REVIEW) |
 # MAGIC
 # MAGIC Scheduled: every 5 minutes via `soc_agent_live` job.
 
@@ -51,7 +51,7 @@ MAX_TOKENS   = 1024
 MAX_ITERS    = 5
 
 # -- Escalation thresholds (match Marston's config.py) --
-Z_THRESHOLD  = 2.5
+Z_THRESHOLD  = 1.5  # lowered from 2.5 for test run with limited baseline data
 CONF_THRESHOLD = 0.7
 
 # -- MLflow --
@@ -427,7 +427,7 @@ def build_agent(llm: ChatOpenAI):
             # Inject host context when args are empty
             if name == "score_anomaly":
                 args.setdefault("host_ip", host)
-                args.setdefault("window_min", 10)
+                args.setdefault("window_min", 60)
             elif name in ("check_ip_reputation","lookup_exposed_ports"):
                 args.setdefault("indicator", host)
             elif name == "get_cve_context":
@@ -541,7 +541,7 @@ print("=" * 65)
 hosts = spark.sql("""
     SELECT host_ip, COUNT(*) AS recent_events
     FROM soc_intelligence.silver.siem_normalized
-    WHERE event_ts >= DATEADD(MINUTE, -10, CURRENT_TIMESTAMP())
+    WHERE event_ts >= DATEADD(MINUTE, -60, CURRENT_TIMESTAMP())
     GROUP BY host_ip ORDER BY recent_events DESC
 """).collect()
 

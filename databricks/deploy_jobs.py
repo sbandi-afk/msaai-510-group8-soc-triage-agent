@@ -23,11 +23,11 @@
 # MAGIC ### Job inventory created
 # MAGIC | Job | Schedule | Notebook |
 # MAGIC |-----|----------|----------|
-# MAGIC | setup_infrastructure | ON-DEMAND | databricks/setup_infrastructure |
-# MAGIC | mock_event_injector_v2 | every 1 min | databricks/mock_event_injector |
-# MAGIC | soc_etl_pipeline_v2 | every 2 min | databricks/soc_etl_pipeline |
-# MAGIC | soc_agent_live | every 5 min | databricks/soc_agent_live |
-# MAGIC | incident_eval_agent_v2 | every 5 min +30s | databricks/incident_eval_agent |
+# MAGIC | setup_infrastructure | ON-DEMAND | databricks/00_setup_infrastructure |
+# MAGIC | mock_event_injector_v2 | every 1 min | databricks/01_mock_event_injector |
+# MAGIC | soc_etl_pipeline_v2 | every 2 min | databricks/02_soc_etl_pipeline |
+# MAGIC | soc_agent_live | every 5 min | databricks/03_soc_agent_live |
+# MAGIC | incident_eval_agent_v2 | every 5 min +30s | databricks/04_incident_eval_agent |
 
 # COMMAND ----------
 import json, requests
@@ -50,11 +50,11 @@ ENV_SPEC = [{"environment_key": "default", "spec": {"client": "2"}}]
 # -- Single source of truth for all jobs --
 # schedule = None  => ON-DEMAND (manual trigger only)
 JOBS = [
-    {"name": "setup_infrastructure",     "nb": "setup_infrastructure",  "cron": None},
-    {"name": "mock_event_injector_v2",   "nb": "mock_event_injector",   "cron": "0 * * * * ?"},
-    {"name": "soc_etl_pipeline_v2",      "nb": "soc_etl_pipeline",      "cron": "0 */2 * * * ?"},
-    {"name": "soc_agent_live",           "nb": "soc_agent_live",        "cron": "0 */5 * * * ?"},
-    {"name": "incident_eval_agent_v2",   "nb": "incident_eval_agent",   "cron": "30 */5 * * * ?"},
+    {"name": "setup_infrastructure",     "nb": "00_setup_infrastructure",  "cron": None},
+    {"name": "mock_event_injector_v2",   "nb": "01_mock_event_injector",   "cron": "0 * * * * ?"},
+    {"name": "soc_etl_pipeline_v2",      "nb": "02_soc_etl_pipeline",      "cron": "0 */2 * * * ?"},
+    {"name": "soc_agent_live",           "nb": "03_soc_agent_live",        "cron": "0 */5 * * * ?"},
+    {"name": "incident_eval_agent_v2",   "nb": "04_incident_eval_agent",   "cron": "30 */5 * * * ?"},
 ]
 
 # COMMAND ----------

@@ -115,7 +115,7 @@ CREATE TABLE IF NOT EXISTS soc_intelligence.gold.incident_eval (
   technique_valid   BOOLEAN   COMMENT 'Technique ID matches T#### pattern',
   confidence_valid  BOOLEAN   COMMENT 'Confidence between 0.0 and 1.0',
   severity_valid    BOOLEAN   COMMENT 'Severity is LOW/MEDIUM/HIGH/CRITICAL',
-  zscore_valid      BOOLEAN   COMMENT 'z_score >= 2.5 (met escalation gate)',
+  zscore_valid      BOOLEAN   COMMENT 'z_score >= 1.5 (met escalation gate)',
   quality_score     DOUBLE    COMMENT 'Overall score 0.0-1.0',
   quality_grade     STRING    COMMENT 'A/B/C/F',
   notes             STRING    COMMENT 'JSON array of failed checks'
@@ -141,7 +141,7 @@ RETURNS TABLE (
   window_start  TIMESTAMP,
   computed_at   TIMESTAMP
 )
-COMMENT 'Z-score anomaly detection for event volume on a given host vs 24h baseline.'
+COMMENT 'Z-score anomaly detection using p90-capped baseline (robust to historical spikes).'
 RETURN
   WITH windowed AS (
     SELECT host_ip, COUNT(*) AS event_count,
@@ -151,21 +151,31 @@ RETURN
       AND event_ts >= DATEADD(HOUR, -24, CURRENT_TIMESTAMP())
     GROUP BY host_ip, DATE_TRUNC('minute', event_ts)
   ),
-  stats AS (
-    SELECT host_ip, AVG(event_count) AS baseline_mean, STDDEV(event_count) AS baseline_std
+  cutoff AS (
+    SELECT host_ip,
+      PERCENTILE_CONT(0.90) WITHIN GROUP (ORDER BY event_count) AS p90
     FROM windowed GROUP BY host_ip
+  ),
+  stats AS (
+    SELECT w.host_ip,
+      AVG(w.event_count)    AS baseline_mean,
+      STDDEV(w.event_count) AS baseline_std
+    FROM windowed w
+    JOIN cutoff c ON w.host_ip = c.host_ip
+    WHERE w.event_count <= c.p90
+    GROUP BY w.host_ip
   ),
   latest AS (
     SELECT * FROM windowed
     WHERE window_start >= DATEADD(MINUTE, -p_window_min, CURRENT_TIMESTAMP())
   )
   SELECT l.host_ip, l.event_count, s.baseline_mean, s.baseline_std,
-    CASE WHEN s.baseline_std = 0 OR s.baseline_std IS NULL THEN 0
+    CASE WHEN s.baseline_std = 0 OR s.baseline_std IS NULL THEN 0.0
          ELSE (l.event_count - s.baseline_mean) / s.baseline_std END AS z_score,
     l.window_start, CURRENT_TIMESTAMP() AS computed_at
   FROM latest l JOIN stats s ON l.host_ip = s.host_ip
 """)
-print("[OK] gold.score_anomaly()")
+print("[OK] gold.score_anomaly() -- p90-filtered robust baseline")
 
 # COMMAND ----------
 # MAGIC %md ## Step 4 -- UC Function: classify_threat()
