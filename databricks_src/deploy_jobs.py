@@ -9,7 +9,7 @@
 # MAGIC ### How it works
 # MAGIC This notebook detects its own location in the repo, so the jobs it creates
 # MAGIC point at the notebooks **wherever your team checked out the repo**
-# MAGIC (e.g. `/Workspace/Repos/<you>/msaai-510-group8-soc-triage-agent/databricks/`).
+# MAGIC (e.g. `/Workspace/Repos/<you>/msaai-510-group8-soc-triage-agent/databricks_src/`).
 # MAGIC No hardcoded paths, no local CLI, no tokens -- it uses the notebook's own
 # MAGIC workspace context.
 # MAGIC
@@ -23,11 +23,11 @@
 # MAGIC ### Job inventory created
 # MAGIC | Job | Schedule | Notebook |
 # MAGIC |-----|----------|----------|
-# MAGIC | setup_infrastructure | ON-DEMAND | databricks/00_setup_infrastructure |
-# MAGIC | mock_event_injector_v2 | every 1 min | databricks/01_mock_event_injector |
-# MAGIC | soc_etl_pipeline_v2 | every 2 min | databricks/02_soc_etl_pipeline |
-# MAGIC | soc_agent_live | every 5 min | databricks/03_soc_agent_live |
-# MAGIC | incident_eval_agent_v2 | every 5 min +30s | databricks/04_incident_eval_agent |
+# MAGIC | setup_infrastructure | ON-DEMAND | databricks_src/00_setup_infrastructure |
+# MAGIC | mock_event_injector_v2 | every 1 min | databricks_src/01_mock_event_injector |
+# MAGIC | soc_etl_pipeline_v2 | every 2 min | databricks_src/02_soc_etl_pipeline |
+# MAGIC | soc_agent_live | every 5 min | databricks_src/03_soc_agent_live |
+# MAGIC | incident_eval_agent_v2 | every 5 min +30s | databricks_src/04_incident_eval_agent |
 
 # COMMAND ----------
 import json, requests
@@ -38,10 +38,10 @@ HOST       = "https://" + spark.conf.get("spark.databricks.workspaceUrl")
 TOKEN      = ctx.apiToken().get()
 HEADERS    = {"Authorization": f"Bearer {TOKEN}", "Content-Type": "application/json"}
 
-# -- Detect this notebook's folder = the repo's databricks/ dir --
-# notebookPath() -> e.g. /Workspace/Repos/you/msaai-510-group8-soc-triage-agent/databricks/deploy_jobs
+# -- Detect this notebook's folder = the repo's databricks_src/ dir --
+# notebookPath() -> e.g. /Workspace/Repos/you/msaai-510-group8-soc-triage-agent/databricks_src/deploy_jobs
 THIS_NB    = ctx.notebookPath().get()
-NB_FOLDER  = "/".join(THIS_NB.split("/")[:-1])   # the databricks/ folder
+NB_FOLDER  = "/".join(THIS_NB.split("/")[:-1])   # the databricks_src/ folder
 print(f"Workspace : {HOST}")
 print(f"Repo path : {NB_FOLDER}")
 

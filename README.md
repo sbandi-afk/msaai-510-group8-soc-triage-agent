@@ -104,7 +104,7 @@ flowchart LR
     ETL["soc_etl_pipeline.ipynb\n(Sai — DE)\nBronze → Silver → Gold\nUC functions deployed"]
     ETL -->|"Delta Lake\ngold tables + UC functions"| AGENT
 
-    subgraph local["Local Python  (notebooks/ + src/)"]
+    subgraph local["Local Python  (local_run/ + src/)"]
         API["04_api_clients.ipynb\nVirusTotal · Shodan · NVD\nwrappers & MOCK_MODE"]
         AGENT["03_agent_loop.ipynb\nLangGraph StateGraph\nReAct agent demo"]
         EVAL["05_evaluation.ipynb\nMLflow traces\nDual-LLM comparison"]
@@ -257,18 +257,18 @@ now fully **deployed and scheduled on Databricks serverless** (see
 - **Governed external access** — UC HTTP connections (`abuseipdb_http`, `shodan_http`),
   host-locked and auditable; API keys injected at query time via `SECRET()` (never in code)
 - Unity Catalog: `soc_intelligence` catalog with `bronze`, `silver`, and `gold` schemas
-- **Infrastructure-as-code**: `databricks/setup_infrastructure` (idempotent bootstrap) +
-  `databricks/deploy_jobs` (creates + schedules all jobs from a fresh git checkout)
+- **Infrastructure-as-code**: `databricks_src/setup_infrastructure` (idempotent bootstrap) +
+  `databricks_src/deploy_jobs` (creates + schedules all jobs from a fresh git checkout)
 
 ### Agent Definition (Marston Ward — AIE) ✅ Complete
 
-Runs as **local Python** (`notebooks/` + reusable `src/soc_agent/`), **MOCK_MODE
+Runs as **local Python** (`local_run/` + reusable `src/soc_agent/`), **MOCK_MODE
 by default** — executes end-to-end with **zero API keys and zero live Databricks**.
 
 - Concrete LangGraph **`StateGraph`** ReAct agent — explicit State, nodes, tools,
-  edges (`notebooks/03_agent_loop.ipynb`, `src/soc_agent/agent.py`)
+  edges (`local_run/03_agent_loop.ipynb`, `src/soc_agent/agent.py`)
 - API client wrappers for **VirusTotal, Shodan, and NVD/CVE** with MOCK_MODE,
-  retries/timeouts, and graceful errors (`notebooks/04_api_clients.ipynb`)
+  retries/timeouts, and graceful errors (`local_run/04_api_clients.ipynb`)
 - `classify_and_ticket()` — LLM-driven MITRE ATT&CK labeling that writes a row
   matching the **exact `gold.incident` schema** (escalates when
   `z_score > 2.5 AND confidence > 0.7`; invalid JSON → manual review)
@@ -278,7 +278,7 @@ by default** — executes end-to-end with **zero API keys and zero live Databric
 
 ### Evaluation (Marston Ward — AIE) ✅ Complete
 
-`notebooks/05_evaluation.ipynb` + `src/soc_agent/eval_helpers.py`:
+`local_run/05_evaluation.ipynb` + `src/soc_agent/eval_helpers.py`:
 
 - **5 MLflow traces** (3 in-scope escalations + 2 out-of-scope rejections) with
   params/tags/metrics and `mlflow.trace` spans
@@ -304,7 +304,7 @@ by default** — executes end-to-end with **zero API keys and zero live Databric
 python -m pip install -r requirements.txt
 python -m ipykernel install --user --name soc-agent --display-name "SOC Agent (Databricks)"
 jupyter nbconvert --to notebook --execute --inplace \
-  --ExecutePreprocessor.kernel_name=soc-agent notebooks/00_run_all.ipynb
+  --ExecutePreprocessor.kernel_name=soc-agent local_run/00_run_all.ipynb
 ```
 
 Full instructions (env vars, switching to live Databricks, selecting LLM
@@ -373,15 +373,15 @@ CREATE FUNCTION gold.check_ip_reputation(ip STRING) RETURNS STRING
 ## Jobs & Scheduling
 
 All jobs run on **serverless** compute and are provisioned by
-`databricks/deploy_jobs` (idempotent, self-locating).
+`databricks_src/deploy_jobs` (idempotent, self-locating).
 
 | Job | Trigger | Notebook | Role |
 |-----|---------|----------|------|
-| `setup_infrastructure` | **ON-DEMAND** | `databricks/setup_infrastructure` | One-time bootstrap: catalog, schemas, volume, UC functions, HTTP connections, tables |
-| `mock_event_injector_v2` | every **1 min** | `databricks/mock_event_injector` | Generate synthetic SIEM events → `bronze.siem_raw_event` |
-| `soc_etl_pipeline_v2` | every **2 min** | `databricks/soc_etl_pipeline` | Incremental Bronze → Silver normalization |
-| `soc_agent_live` | every **5 min** | `databricks/soc_agent_live` | LangGraph agent + dual LLM + MLflow + governed enrichment → `gold.incident` |
-| `incident_eval_agent_v2` | every **5 min +30s** | `databricks/incident_eval_agent` | Quality grading + MLflow summary → `gold.incident_eval` |
+| `setup_infrastructure` | **ON-DEMAND** | `databricks_src/setup_infrastructure` | One-time bootstrap: catalog, schemas, volume, UC functions, HTTP connections, tables |
+| `mock_event_injector_v2` | every **1 min** | `databricks_src/mock_event_injector` | Generate synthetic SIEM events → `bronze.siem_raw_event` |
+| `soc_etl_pipeline_v2` | every **2 min** | `databricks_src/soc_etl_pipeline` | Incremental Bronze → Silver normalization |
+| `soc_agent_live` | every **5 min** | `databricks_src/soc_agent_live` | LangGraph agent + dual LLM + MLflow + governed enrichment → `gold.incident` |
+| `incident_eval_agent_v2` | every **5 min +30s** | `databricks_src/incident_eval_agent` | Quality grading + MLflow summary → `gold.incident_eval` |
 
 ```
 every 1 min   mock_event_injector  ──►  bronze.siem_raw_event
@@ -398,7 +398,7 @@ every 5 min   incident_eval_agent  ──►  gold.incident_eval  + MLflow summa
 
 ## Databricks Deployment (reproduce from a fresh git checkout)
 
-The operational notebooks live under `databricks/` as `.py` files (the
+The operational notebooks live under `databricks_src/` as `.py` files (the
 `# Databricks notebook source` header makes Git folders render them as notebooks).
 
 1. **Clone the repo** into Databricks via **Repos / Git folders**
@@ -408,9 +408,9 @@ The operational notebooks live under `databricks/` as `.py` files (the
    databricks secrets put-secret  mcp-keys abuseipdb-key
    databricks secrets put-secret  mcp-keys shodan-key
    ```
-3. Open **`databricks/setup_infrastructure`** → **Run All**
+3. Open **`databricks_src/setup_infrastructure`** → **Run All**
    (catalog, schemas, volume, 5 UC functions, 2 HTTP connections, tables)
-4. Open **`databricks/deploy_jobs`** → **Run All**
+4. Open **`databricks_src/deploy_jobs`** → **Run All**
    (creates + schedules all 5 jobs, pointing at *your* checkout location)
 
 `deploy_jobs` detects its own path, so the jobs always point at the notebooks in
@@ -424,7 +424,7 @@ whoever's checkout — no hardcoded paths. Re-running it updates jobs in place
 ## Repository Structure
 
 ```
-databricks/                       ← Sai (DE) — runs ON Databricks (serverless jobs)
+databricks_src/                       ← Sai (DE) — runs ON Databricks (serverless jobs)
   setup_infrastructure.py           catalog/schemas/volume + 5 UC fns + 2 HTTP connections + tables
   mock_event_injector.py            synthetic SIEM events → bronze (test-only)
   soc_etl_pipeline.py               incremental bronze → silver normalization
@@ -433,7 +433,7 @@ databricks/                       ← Sai (DE) — runs ON Databricks (serverles
   deploy_jobs.py                    ⭐ creates + schedules all jobs (self-locating, idempotent)
 deploy_jobs.ps1                   ← local-admin alternative (PowerShell + REST)
 
-notebooks/                        ← Marston (AIE) — local Python, MOCK_MODE
+local_run/                        ← Marston (AIE) — local Python, MOCK_MODE
   03_agent_loop.ipynb               StateGraph ReAct agent
   04_api_clients.ipynb              VirusTotal / Shodan / NVD
   05_evaluation.ipynb               MLflow traces + dual-LLM
@@ -444,7 +444,7 @@ src/
     mocks.py                        zero-creds fixtures (gold, VT, Shodan, NVD, LLM)
     api_clients.py                  VirusTotal / Shodan / NVD wrappers
     gold_tools.py                   wrappers for Sai's gold UC functions + incidents
-    llm.py                          get_llm() factory (databricks/openai/mock)
+    llm.py                          get_llm() factory (databricks_src/openai/mock)
     agent.py                        AgentState, nodes, tools, edges, classify_and_ticket
     eval_helpers.py                 MLflow tracing + dual-LLM comparison
 docs/
@@ -452,15 +452,15 @@ docs/
   aie_writeup.md                  ← AIE component summary for the team report
   eval_artifacts/                 ← trace + comparison CSVs (generated)
   business_case.md                ← Marquise (PM)
-soc_etl_pipeline.ipynb            ← Sai (DE) — original combined notebook (superseded by databricks/)
+soc_etl_pipeline.ipynb            ← Sai (DE) — original combined notebook (superseded by databricks_src/)
 requirements.txt                  ← local Python deps
 .env.example                      ← config template (copy to .env)
 proposal_cybersecurity_agent.pdf
 README.md
 ```
 
-> **Two execution modes, one codebase.** Marston's `notebooks/` + `src/soc_agent/`
-> run **locally in MOCK_MODE** (zero creds — for graders). The `databricks/` folder
+> **Two execution modes, one codebase.** Marston's `local_run/` + `src/soc_agent/`
+> run **locally in MOCK_MODE** (zero creds — for graders). The `databricks_src/` folder
 > is the **live, scheduled** deployment on Databricks serverless: same agent design
 > (LangGraph + dual LLM + MLflow), inlined into a single notebook with mock mode
 > removed and the threat-intel tools wired to governed UC HTTP connections.

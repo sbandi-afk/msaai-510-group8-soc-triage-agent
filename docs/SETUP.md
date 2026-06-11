@@ -52,7 +52,7 @@ headlessly:
 ```bash
 jupyter nbconvert --to notebook --execute --inplace \
   --ExecutePreprocessor.kernel_name=soc-agent \
-  notebooks/04_api_clients.ipynb
+  local_run/04_api_clients.ipynb
 ```
 
 ---
@@ -62,7 +62,7 @@ jupyter nbconvert --to notebook --execute --inplace \
 Nothing to configure. Run the notebooks in this order:
 
 ```
-notebooks/04_api_clients.ipynb   →  03_agent_loop.ipynb
+local_run/04_api_clients.ipynb   →  03_agent_loop.ipynb
                                  →  05_evaluation.ipynb  →  00_run_all.ipynb
 ```
 
@@ -148,7 +148,7 @@ export SOC_MOCK_MODE=1
 for nb in 04_api_clients 03_agent_loop 05_evaluation 00_run_all; do
   jupyter nbconvert --to notebook --execute --inplace \
     --ExecutePreprocessor.kernel_name=soc-agent \
-    --ExecutePreprocessor.timeout=180 notebooks/$nb.ipynb
+    --ExecutePreprocessor.timeout=180 local_run/$nb.ipynb
 done
 ```
 
