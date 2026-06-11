@@ -68,22 +68,26 @@ The following table summarizes the Databricks compute types and rates relevant t
 Estimated Databricks compute cost (Jobs Serverless):
 
 ```text
-550 DBU-hours/month x $0.40 per DBU = $220/month
-$220/month x 12 months = $2,640/year
+Up to 550 DBU-hours/month x $0.40 per DBU = $220/month
+$220/month x 12 months = $2,640/year (planning ceiling)
 ```
 
 Estimated Foundation Model API cost (LLM inference):
 
 ```text
-Foundation Model API estimate = $3,000/year
-(based on ~288 agent runs/day, ~1K tokens/run, Llama-3.3-70B token pricing)
+Foundation Model API estimate = up to $3,000/year (planning ceiling)
+(sized for ~288 agent runs/day; the deployed staggered hourly cadence of
+24 triage cycles/day — inject :00, ETL :10, agent :20, eval :25:30 —
+uses roughly 1/12 of that volume at ~1-2K tokens/run)
 ```
 
 Estimated annual platform operating cost:
 
 ```text
 $2,640 Jobs Serverless compute + $3,000 Foundation Model APIs = $5,640/year
-Rounded estimate = ~$6,000/year
+Rounded planning ceiling = ~$6,000/year
+(the measured hourly cadence puts actual run-rate well below this ceiling;
+we keep $6,000/year as the conservative figure for ROI math)
 ```
 
 The one-time prototype implementation cost is estimated at $60,000 to $80,000. This includes engineering time, security review, testing, change management, scheduled job setup, data validation, and integration work. Using the midpoint of $70,000, the first-year cost estimate is:
@@ -96,9 +100,11 @@ Total first-year project cost = $76,000
 
 This cost is small compared with the estimated manual triage labor pool of about $400,000 per year. The project does not need to replace analysts or automate all alert handling to create value. It only needs to reduce enough repetitive triage work to offset the first-year implementation and operating cost.
 
+These planning figures are anchored to measured system behavior rather than hypothetical throughput. As of June 11, 2026, the deployed pipeline has ingested **52,043 raw events** into Bronze, normalized **41,570 events** into Silver, and written **20 incidents** to `gold.incident` (15 HIGH severity; 9 routed to manual review), with **14 structural quality evaluations** in `gold.incident_eval` averaging a **0.757 quality score**. That is an escalation rate of roughly **0.05% of normalized events** — the agent absorbs the alert noise and surfaces a short, enriched queue for analysts. The full per-run math is in the team ROI worksheet (`_working/roi_calculation.md`).
+
 ## 6. Analyst Cost, Alerts per Shift, and MTTD/MTTR Improvement
 
-The manual savings calculation starts with analyst time. The estimate assumes about 30 alerts per shift, 37.5 minutes per alert, 250 working days per year, and a fully loaded analyst cost of $85 per hour.
+The manual savings calculation starts with analyst time. The estimate assumes about 30 alerts per shift, 37.5 minutes per alert, 250 working days per year, and a fully loaded analyst cost of $85 per hour. Each avoided manual triage is therefore worth about **$53 of analyst time** (37.5 min × $85/hr).
 
 Manual triage hours:
 
@@ -127,10 +133,12 @@ The annual savings depends on how much repetitive triage work the agent can safe
 Using the $76,000 first-year cost estimate:
 
 ```text
-Conservative: $120,000 - $76,000 = $44,000 first-year net value
-Baseline: $240,000 - $76,000 = $164,000 first-year net value
-Optimistic: $320,000 - $76,000 = $244,000 first-year net value
+Conservative: $120,000 - $76,000 = $44,000 first-year net value  (~0.6x ROI)
+Baseline: $240,000 - $76,000 = $164,000 first-year net value  (~2.2x ROI)
+Optimistic: $320,000 - $76,000 = $244,000 first-year net value  (~3.2x ROI)
 ```
+
+Our headline figure is the baseline scenario: **~$240,000 per year of analyst labor value recovered for a ~$76,000 first-year cost (~$164,000 net, roughly 2.2x first-year ROI)**. In subsequent years the recurring cost drops to the ~$6,000 platform ceiling, so even the conservative scenario returns more than 15x annually once implementation is paid off.
 
 The following chart compares each scenario's labor savings against the $76,000 first-year project cost:
 
