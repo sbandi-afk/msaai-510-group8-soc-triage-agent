@@ -1,4 +1,4 @@
-﻿# Databricks notebook source
+# Databricks notebook source
 # MAGIC %md
 # MAGIC # SOC Intelligence -- Infrastructure Setup
 # MAGIC
