@@ -31,6 +31,9 @@ databricks-sdk==0.114.0
 requests==2.34.2
 python-dotenv==1.2.2
 
+# --- tests ---
+pytest==8.4.2
+
 # --- data / notebooks ---
 pandas==2.3.3
 numpy>=2.1.0

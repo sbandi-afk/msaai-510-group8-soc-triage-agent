@@ -21,13 +21,14 @@
 # MAGIC 4. Run **this notebook** (`deploy_jobs`) -- creates + schedules all jobs
 # MAGIC
 # MAGIC ### Job inventory created
+# MAGIC Staggered hourly cadence (UTC) so each cycle flows inject → ETL → triage → eval:
 # MAGIC | Job | Schedule | Notebook |
 # MAGIC |-----|----------|----------|
 # MAGIC | setup_infrastructure | ON-DEMAND | databricks_src/00_setup_infrastructure |
-# MAGIC | mock_event_injector_v2 | every 1 min | databricks_src/01_mock_event_injector |
-# MAGIC | soc_etl_pipeline_v2 | every 2 min | databricks_src/02_soc_etl_pipeline |
-# MAGIC | soc_agent_live | every 5 min | databricks_src/03_soc_agent_live |
-# MAGIC | incident_eval_agent_v2 | every 5 min +30s | databricks_src/04_incident_eval_agent |
+# MAGIC | mock_event_injector_v2 | hourly at :00 | databricks_src/01_mock_event_injector |
+# MAGIC | soc_etl_pipeline_v2 | hourly at :10 | databricks_src/02_soc_etl_pipeline |
+# MAGIC | soc_agent_live | hourly at :20 | databricks_src/03_soc_agent_live |
+# MAGIC | incident_eval_agent_v2 | hourly at :25:30 | databricks_src/04_incident_eval_agent |
 
 # COMMAND ----------
 import json, requests
@@ -49,12 +50,15 @@ ENV_SPEC = [{"environment_key": "default", "spec": {"client": "2"}}]
 
 # -- Single source of truth for all jobs --
 # schedule = None  => ON-DEMAND (manual trigger only)
+# Staggered hourly (UTC): inject :00 -> ETL :10 -> agent :20 -> eval :25:30.
+# These crons MUST match the live job configs -- re-running this deployer
+# resets schedules to whatever is listed here.
 JOBS = [
     {"name": "setup_infrastructure",     "nb": "00_setup_infrastructure",  "cron": None},
-    {"name": "mock_event_injector_v2",   "nb": "01_mock_event_injector",   "cron": "0 * * * * ?"},
-    {"name": "soc_etl_pipeline_v2",      "nb": "02_soc_etl_pipeline",      "cron": "0 */2 * * * ?"},
-    {"name": "soc_agent_live",           "nb": "03_soc_agent_live",        "cron": "0 */5 * * * ?"},
-    {"name": "incident_eval_agent_v2",   "nb": "04_incident_eval_agent",   "cron": "30 */5 * * * ?"},
+    {"name": "mock_event_injector_v2",   "nb": "01_mock_event_injector",   "cron": "0 0 * * * ?"},
+    {"name": "soc_etl_pipeline_v2",      "nb": "02_soc_etl_pipeline",      "cron": "0 10 * * * ?"},
+    {"name": "soc_agent_live",           "nb": "03_soc_agent_live",        "cron": "0 20 * * * ?"},
+    {"name": "incident_eval_agent_v2",   "nb": "04_incident_eval_agent",   "cron": "30 25 * * * ?"},
 ]
 
 # COMMAND ----------

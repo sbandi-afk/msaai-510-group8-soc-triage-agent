@@ -16,7 +16,8 @@ START → scope_guard ─(out of scope)→ reject → END
   state, and folds normalized results back into state.
 * **classify_and_ticket** — LLM-driven MITRE ATT&CK classification, then writes
   an incident row matching the ``gold.incident`` schema when the escalation
-  criteria are met (``z_score > 2.5 AND confidence > 0.7``).
+  criteria are met (``z_score > 1.5 AND (confidence > 0.7 OR MANUAL_REVIEW)``,
+  matching the deployed live agent).
 
 Input string fields are sanitized before prompting (truncate + printable ASCII)
 per the proposal's prompt-injection defense.
@@ -162,12 +163,16 @@ def classify_and_ticket(
     z = float(context.get("z_score", 0.0) or 0.0)
     conf = float(classification.get("confidence", 0.0) or 0.0)
 
-    escalate = (z > s.anomaly_z_threshold and conf > s.min_confidence_to_ticket)
+    # Matches the deployed live agent (databricks_src/03_soc_agent_live.py):
+    # an incident is only created for a genuinely anomalous host; within an
+    # anomaly, escalate on high confidence OR route to manual review when the
+    # LLM cannot classify. Quiet hosts are dismissed regardless of confidence.
     manual = classification.get("tactic") == "MANUAL_REVIEW"
+    escalate = z > s.anomaly_z_threshold and (conf > s.min_confidence_to_ticket or manual)
 
     incident = None
     written = False
-    if escalate or manual:
+    if escalate:
         incident = gold_tools.write_incident(
             {
                 "host_ip": context.get("host_ip"),

@@ -145,7 +145,7 @@ Once the loop exits, **`classify_and_ticket()`** sends all accumulated context t
 - **Manual review** (`z_score > 1.5` but the LLM returns invalid JSON or flags `MANUAL_REVIEW`): an incident row is still written and flagged for a human analyst. Decision is `manual_review`.
 - **Dismiss** (z-score at or below the anomaly gate): no ticket is written. Decision is `dismissed`.
 
-> Deployed gate (`databricks_src/03_soc_agent_live.py`): `escalate = z > 1.5 AND (conf > 0.7 OR tactic == MANUAL_REVIEW)` — an incident is only ever created for a genuinely anomalous host, and uncertain classifications inside an anomaly are routed to a human rather than dropped. The local mock package (`src/soc_agent/`) still defaults to the original `z > 2.5 AND conf > 0.7` gate (`ANOMALY_Z_THRESHOLD` env-configurable).
+> Escalation gate (identical in the deployed `databricks_src/03_soc_agent_live.py` and the local `src/soc_agent/` package): `escalate = z > 1.5 AND (conf > 0.7 OR tactic == MANUAL_REVIEW)` — an incident is only ever created for a genuinely anomalous host, and uncertain classifications inside an anomaly are routed to a human rather than dropped. Thresholds are env-configurable locally (`ANOMALY_Z_THRESHOLD`, `MIN_CONFIDENCE_TO_TICKET`).
 
 Every step appends a human-readable note to the `trace` list in state, giving auditors a step-by-step explanation of the agent's reasoning without reading raw LLM messages.
 
@@ -272,9 +272,9 @@ by default** — executes end-to-end with **zero API keys and zero live Databric
 - API client wrappers for **VirusTotal, Shodan, and NVD/CVE** with MOCK_MODE,
   retries/timeouts, and graceful errors (`local_run/04_api_clients.ipynb`)
 - `classify_and_ticket()` — LLM-driven MITRE ATT&CK labeling that writes a row
-  matching the **exact `gold.incident` schema** (local default gate:
-  `z_score > 2.5 AND confidence > 0.7`; deployed live gate: `z > 1.5` with a
-  MANUAL_REVIEW escape hatch; invalid JSON → manual review)
+  matching the **exact `gold.incident` schema** (gate aligned local + live:
+  `z_score > 1.5 AND (confidence > 0.7 OR MANUAL_REVIEW)`; invalid JSON →
+  manual review)
 - **Out-of-scope query rejection** with 2 explicit worked examples
 - **Fully configurable LLM** provider/models via env (`get_llm()` factory):
   `databricks` (default) / `openai` / `mock`
@@ -309,6 +309,9 @@ python -m ipykernel install --user --name soc-agent --display-name "SOC Agent (D
 jupyter nbconvert --to notebook --execute --inplace \
   --ExecutePreprocessor.kernel_name=soc-agent local_run/00_run_all.ipynb
 ```
+
+**Running tests:** `pytest tests/` (after `pip install -r requirements.txt`) — smoke
+suite covering the escalation gate, scope guard, and mock fixtures; no credentials needed.
 
 Full instructions (env vars, switching to live Databricks, selecting LLM
 provider/models) are in **[`docs/SETUP.md`](docs/SETUP.md)**. AIE component

@@ -27,12 +27,13 @@ START → scope_guard ─(out of scope)→ reject → END
   into State. Tool errors are caught and returned as data, never raised.
 - **classify_and_ticket** — LLM-driven MITRE ATT&CK classification with strict
   JSON-schema enforcement; writes an incident row to `gold.incident` when the
-  escalation gate is met. The local package (`src/soc_agent/`) defaults to
-  `z_score > 2.5 AND confidence > 0.7` (env-configurable); the **deployed live
-  agent** (`databricks_src/03_soc_agent_live.py`) uses `z_score > 1.5 AND
-  (confidence > 0.7 OR tactic == MANUAL_REVIEW)` so uncertain classifications on
-  genuinely anomalous hosts still produce a ticket for a human. Unparseable LLM
-  output is routed to **manual review**, never silently passed.
+  escalation gate is met. The gate is identical in the local package
+  (`src/soc_agent/`) and the deployed live agent
+  (`databricks_src/03_soc_agent_live.py`): `z_score > 1.5 AND (confidence > 0.7
+  OR tactic == MANUAL_REVIEW)` — uncertain classifications on genuinely
+  anomalous hosts still produce a ticket for a human, while quiet hosts are
+  dismissed. Thresholds are env-configurable. Unparseable LLM output is routed
+  to **manual review**, never silently passed.
 
 All logic lives in `src/soc_agent/` and is imported by the notebooks so nothing
 is duplicated.

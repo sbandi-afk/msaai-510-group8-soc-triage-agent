@@ -96,7 +96,7 @@ class Settings:
 
     # --- agent loop -------------------------------------------------------
     max_tool_iterations: int = 5
-    anomaly_z_threshold: float = 2.5
+    anomaly_z_threshold: float = 1.5  # matches deployed live gate (was 2.5)
     min_confidence_to_ticket: float = 0.7
     prompt_field_max_chars: int = 256  # prompt-injection input sanitization
 
@@ -155,7 +155,7 @@ class Settings:
             shodan_api_key=_env("SHODAN_API_KEY"),
             nvd_api_key=_env("NVD_API_KEY"),
             max_tool_iterations=int(_env("MAX_TOOL_ITERATIONS", "5")),
-            anomaly_z_threshold=float(_env("ANOMALY_Z_THRESHOLD", "2.5")),
+            anomaly_z_threshold=float(_env("ANOMALY_Z_THRESHOLD", "1.5")),
             min_confidence_to_ticket=float(_env("MIN_CONFIDENCE_TO_TICKET", "0.7")),
             mlflow_tracking_uri=_env("MLFLOW_TRACKING_URI", "file:./mlruns"),
             mlflow_experiment=_env("MLFLOW_EXPERIMENT", "soc_triage_agent"),
