@@ -37,7 +37,7 @@ Our current design is stronger than the initial scope because it now has a live 
 
 The use case is also a good fit for an agentic design because the correct next action depends on intermediate results. A static rule-only workflow may not know whether an alert needs anomaly scoring, IP reputation, exposed-port context, CVE lookup, or manual review. The ReAct loop gives the agent a way to gather context step by step and stop once it has enough information to classify the event.
 
-Another reason the use case is justified is governance. The implementation does not allow the LLM to create incidents without controls. It uses an escalation gate based on `z_score > 2.5` and confidence above `0.7`, logs results to MLflow, compares two LLM configurations, and runs a structural quality check on generated incidents. This makes our agent more appropriate for our SOC because it treats the agent as a controlled assistant, not an unrestricted decision-maker.
+Another reason the use case is justified is governance. The implementation does not allow the LLM to create incidents without controls. It uses an anomaly-gated escalation rule (in production: `z_score > 1.5`, with high-confidence classifications escalated automatically and uncertain ones routed to manual review instead of being dropped), logs results to MLflow, compares two LLM configurations, and runs a structural quality check on generated incidents. This makes our agent more appropriate for our SOC because it treats the agent as a controlled assistant, not an unrestricted decision-maker.
 
 The following diagram illustrates the escalation decision logic after the agent completes enrichment:
 

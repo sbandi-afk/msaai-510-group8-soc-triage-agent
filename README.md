@@ -55,11 +55,11 @@ medallion Bronze → Silver → Gold, serverless jobs):
 │ (7 tactics)  │  ├───►│   event      │─────►│ host               │───►│ score_anomaly()  │
 │ mock_event_  │──┘    │ (append)     │ ETL  │ user_account       │    │ classify_threat()│
 │   injector   │       └──────────────┘ incr └────────────────────┘    │ get_exposed_     │
-└──────────────┘        every 1 min     2min       every 2 min          │   assets()       │
+└──────────────┘        hourly :00      incr       hourly :10           │   assets()       │
                                                                         └────────┬─────────┘
                                                                                  │ reads
 ┌────────────────────────────────────────────────────────────────────────────── ▼ ──────────┐
-│                       LangGraph ReAct Agent  (soc_agent_live, every 5 min)                  │
+│                       LangGraph ReAct Agent  (soc_agent_live, hourly :20)                   │
 │                                                                                            │
 │   scope_guard ──► reason ⇄ act  (ReAct loop) ──► classify_and_ticket ──► write_incident    │
 │                            │                            │                                  │
@@ -82,7 +82,7 @@ medallion Bronze → Silver → Gold, serverless jobs):
                     └────────────────────┘
 
                     GOLD outputs:  incident  ──►  incident_eval
-                                   (tickets)      (quality grades + MLflow, every 5 min)
+                                   (tickets)      (quality grades + MLflow, hourly :25)
 ```
 
 > **Note on enrichment.** `check_ip_reputation` and `lookup_exposed_ports` are now
@@ -95,13 +95,13 @@ medallion Bronze → Silver → Gold, serverless jobs):
 
 How the notebooks and the reusable package connect end-to-end:
 
-The pipeline begins in **Databricks** with `soc_etl_pipeline.ipynb`, where Sai's DE work runs the Bronze → Silver → Gold medallion ETL and deploys the Unity Catalog SQL functions (`score_anomaly`, `classify_threat`, `get_exposed_assets`). The resulting Gold Delta tables and UC functions are the data contract handed off to the AIE layer.
+The pipeline begins in **Databricks** with `databricks_src/02_soc_etl_pipeline.py`, where Sai's DE work runs the Bronze → Silver → Gold medallion ETL, and `databricks_src/00_setup_infrastructure.py`, which deploys the Unity Catalog SQL functions (`score_anomaly`, `classify_threat`, `get_exposed_assets`). The resulting Gold Delta tables and UC functions are the data contract handed off to the AIE layer.
 
 On the local Python side, **`00_run_all.ipynb`** is the single integration entry point — it executes the three AIE notebooks in order. **`04_api_clients.ipynb`** exercises the external-API wrappers (VirusTotal, Shodan, NVD) in isolation. **`03_agent_loop.ipynb`** runs the LangGraph ReAct agent end-to-end against live or mock data. **`05_evaluation.ipynb`** replays the same traces through two LLM configurations and records params, metrics, and artifacts. All three notebooks import from `src/soc_agent/`, the reusable package that contains every module (`config`, `mocks`, `llm`, `agent`, `gold_tools`, `api_clients`, `eval_helpers`). Evaluation output flows in two directions: structured CSVs land in `docs/eval_artifacts/` for submission, and MLflow logs params/metrics/tags to `mlruns/` for experiment tracking.
 
 ```mermaid
 flowchart LR
-    ETL["soc_etl_pipeline.ipynb\n(Sai — DE)\nBronze → Silver → Gold\nUC functions deployed"]
+    ETL["databricks_src/02_soc_etl_pipeline.py\n(Sai — DE)\nBronze → Silver → Gold\nUC functions deployed"]
     ETL -->|"Delta Lake\ngold tables + UC functions"| AGENT
 
     subgraph local["Local Python  (local_run/ + src/)"]
@@ -141,9 +141,11 @@ All tool results accumulate in `AgentState` — a `TypedDict` that tracks the qu
 
 Once the loop exits, **`classify_and_ticket()`** sends all accumulated context to the LLM and asks for a MITRE ATT&CK label (tactic, technique ID, severity, confidence). The decision branches on two thresholds:
 
-- **Escalate** (`z_score > 2.5 AND confidence > 0.7`): `write_incident()` inserts a row into `gold.incident` matching the exact UC schema. The final decision is `escalated`.
-- **Manual review** (LLM returns invalid JSON or flags `MANUAL_REVIEW`): the incident is flagged for a human analyst. Decision is `manual_review`.
-- **Dismiss** (below threshold): no ticket is written. Decision is `dismissed`.
+- **Escalate** (`z_score > 1.5 AND confidence > 0.7`): `write_incident()` inserts a row into `gold.incident` matching the exact UC schema. The final decision is `escalated`.
+- **Manual review** (`z_score > 1.5` but the LLM returns invalid JSON or flags `MANUAL_REVIEW`): an incident row is still written and flagged for a human analyst. Decision is `manual_review`.
+- **Dismiss** (z-score at or below the anomaly gate): no ticket is written. Decision is `dismissed`.
+
+> Deployed gate (`databricks_src/03_soc_agent_live.py`): `escalate = z > 1.5 AND (conf > 0.7 OR tactic == MANUAL_REVIEW)` — an incident is only ever created for a genuinely anomalous host, and uncertain classifications inside an anomaly are routed to a human rather than dropped. The local mock package (`src/soc_agent/`) still defaults to the original `z > 2.5 AND conf > 0.7` gate (`ANOMALY_Z_THRESHOLD` env-configurable).
 
 Every step appends a human-readable note to the `trace` list in state, giving auditors a step-by-step explanation of the agent's reasoning without reading raw LLM messages.
 
@@ -178,13 +180,13 @@ flowchart TD
 
     CT["classify_and_ticket()\nLLM → MITRE ATT&CK\ntactic · technique · confidence"]
 
-    CT -- "z_score > 2.5\nAND confidence > 0.7" --> WI["write_incident()\nWrite row to\ngold.incident table"]
+    CT -- "z_score > 1.5\nAND confidence > 0.7" --> WI["write_incident()\nWrite row to\ngold.incident table"]
     WI --> END2(["END  ·  decision = escalated"])
 
-    CT -- "invalid JSON" --> MR["decision = manual_review\nFlagged for analyst"]
+    CT -- "z_score > 1.5\ninvalid JSON / MANUAL_REVIEW" --> MR["write_incident()\ndecision = manual_review\nFlagged for analyst"]
     MR --> END3(["END"])
 
-    CT -- "below threshold" --> END4(["END  ·  decision = dismissed"])
+    CT -- "z_score ≤ 1.5" --> END4(["END  ·  decision = dismissed"])
 
     subgraph state["AgentState (TypedDict)"]
         S1["user_query · event_payload · host_ip"]
@@ -270,8 +272,9 @@ by default** — executes end-to-end with **zero API keys and zero live Databric
 - API client wrappers for **VirusTotal, Shodan, and NVD/CVE** with MOCK_MODE,
   retries/timeouts, and graceful errors (`local_run/04_api_clients.ipynb`)
 - `classify_and_ticket()` — LLM-driven MITRE ATT&CK labeling that writes a row
-  matching the **exact `gold.incident` schema** (escalates when
-  `z_score > 2.5 AND confidence > 0.7`; invalid JSON → manual review)
+  matching the **exact `gold.incident` schema** (local default gate:
+  `z_score > 2.5 AND confidence > 0.7`; deployed live gate: `z > 1.5` with a
+  MANUAL_REVIEW escape hatch; invalid JSON → manual review)
 - **Out-of-scope query rejection** with 2 explicit worked examples
 - **Fully configurable LLM** provider/models via env (`get_llm()` factory):
   `databricks` (default) / `openai` / `mock`
@@ -375,20 +378,24 @@ CREATE FUNCTION gold.check_ip_reputation(ip STRING) RETURNS STRING
 All jobs run on **serverless** compute and are provisioned by
 `databricks_src/deploy_jobs` (idempotent, self-locating).
 
+Jobs run on a **staggered hourly cadence** (UTC) so each cycle flows
+inject → ETL → triage → eval while keeping serverless cost low. (During initial
+bring-up they ran at 1/2/5-minute intervals; the hourly schedule is the steady state.)
+
 | Job | Trigger | Notebook | Role |
 |-----|---------|----------|------|
-| `setup_infrastructure` | **ON-DEMAND** | `databricks_src/setup_infrastructure` | One-time bootstrap: catalog, schemas, volume, UC functions, HTTP connections, tables |
-| `mock_event_injector_v2` | every **1 min** | `databricks_src/mock_event_injector` | Generate synthetic SIEM events → `bronze.siem_raw_event` |
-| `soc_etl_pipeline_v2` | every **2 min** | `databricks_src/soc_etl_pipeline` | Incremental Bronze → Silver normalization |
-| `soc_agent_live` | every **5 min** | `databricks_src/soc_agent_live` | LangGraph agent + dual LLM + MLflow + governed enrichment → `gold.incident` |
-| `incident_eval_agent_v2` | every **5 min +30s** | `databricks_src/incident_eval_agent` | Quality grading + MLflow summary → `gold.incident_eval` |
+| `setup_infrastructure` | **ON-DEMAND** | `databricks_src/00_setup_infrastructure` | One-time bootstrap: catalog, schemas, volume, UC functions, HTTP connections, tables |
+| `mock_event_injector_v2` | hourly at **:00** | `databricks_src/01_mock_event_injector` | Generate synthetic SIEM events → `bronze.siem_raw_event` |
+| `soc_etl_pipeline_v2` | hourly at **:10** | `databricks_src/02_soc_etl_pipeline` | Incremental Bronze → Silver normalization |
+| `soc_agent_live` | hourly at **:20** | `databricks_src/03_soc_agent_live` | LangGraph agent + dual LLM + MLflow + governed enrichment → `gold.incident` |
+| `incident_eval_agent_v2` | hourly at **:25:30** | `databricks_src/04_incident_eval_agent` | Quality grading + MLflow summary → `gold.incident_eval` |
 
 ```
-every 1 min   mock_event_injector  ──►  bronze.siem_raw_event
-every 2 min   soc_etl_pipeline     ──►  silver.* (watermark incremental)
-every 5 min   soc_agent_live       ──►  score_anomaly → enrich (AbuseIPDB/Shodan/NVD)
-                                         → classify (LLM) → gold.incident   + MLflow run
-every 5 min   incident_eval_agent  ──►  gold.incident_eval  + MLflow summary
+hh:00      mock_event_injector  ──►  bronze.siem_raw_event
+hh:10      soc_etl_pipeline     ──►  silver.* (watermark incremental)
+hh:20      soc_agent_live       ──►  score_anomaly → enrich (AbuseIPDB/Shodan/NVD)
+                                      → classify (LLM) → gold.incident   + MLflow run
+hh:25:30   incident_eval_agent  ──►  gold.incident_eval  + MLflow summary
 ```
 
 > `mock_event_injector` is test-only — in production you would remove it and point
@@ -424,14 +431,14 @@ whoever's checkout — no hardcoded paths. Re-running it updates jobs in place
 ## Repository Structure
 
 ```
-databricks_src/                       ← Sai (DE) — runs ON Databricks (serverless jobs)
-  setup_infrastructure.py           catalog/schemas/volume + 5 UC fns + 2 HTTP connections + tables
-  mock_event_injector.py            synthetic SIEM events → bronze (test-only)
-  soc_etl_pipeline.py               incremental bronze → silver normalization
-  soc_agent_live.py                 LangGraph + dual LLM + MLflow + governed enrichment (live)
-  incident_eval_agent.py            incident quality grading + MLflow summary
+databricks_src/                   ← Sai (DE) — runs ON Databricks (serverless jobs)
+  00_setup_infrastructure.py        catalog/schemas/volume + 5 UC fns + 2 HTTP connections + tables
+  01_mock_event_injector.py         synthetic SIEM events → bronze (test-only)
+  02_soc_etl_pipeline.py            incremental bronze → silver normalization
+  03_soc_agent_live.py              LangGraph + dual LLM + MLflow + governed enrichment (live)
+  04_incident_eval_agent.py         incident quality grading + MLflow summary
   deploy_jobs.py                    ⭐ creates + schedules all jobs (self-locating, idempotent)
-deploy_jobs.ps1                   ← local-admin alternative (PowerShell + REST)
+  deploy_jobs.ps1                   local-admin alternative (PowerShell + REST)
 
 local_run/                        ← Marston (AIE) — local Python, MOCK_MODE
   03_agent_loop.ipynb               StateGraph ReAct agent
@@ -444,7 +451,7 @@ src/
     mocks.py                        zero-creds fixtures (gold, VT, Shodan, NVD, LLM)
     api_clients.py                  VirusTotal / Shodan / NVD wrappers
     gold_tools.py                   wrappers for Sai's gold UC functions + incidents
-    llm.py                          get_llm() factory (databricks_src/openai/mock)
+    llm.py                          get_llm() factory (databricks / openai / mock)
     agent.py                        AgentState, nodes, tools, edges, classify_and_ticket
     eval_helpers.py                 MLflow tracing + dual-LLM comparison
 docs/
@@ -452,7 +459,6 @@ docs/
   aie_writeup.md                  ← AIE component summary for the team report
   eval_artifacts/                 ← trace + comparison CSVs (generated)
   business_case.md                ← Marquise (PM)
-soc_etl_pipeline.ipynb            ← Sai (DE) — original combined notebook (superseded by databricks_src/)
 requirements.txt                  ← local Python deps
 .env.example                      ← config template (copy to .env)
 proposal_cybersecurity_agent.pdf
@@ -467,7 +473,8 @@ README.md
 
 ## Live Evaluation Results
 
-Evaluation run: **2026-06-02** against Databricks Model Serving (local Python kernel, `soc_agent.ipynb`).
+Evaluation run: **2026-06-02** against Databricks Model Serving (local Python
+kernel; the evaluation notebook now lives at `local_run/05_evaluation.ipynb`).
 
 ### Model A — `databricks-meta-llama-3-3-70b-instruct`
 
@@ -481,10 +488,22 @@ Evaluation run: **2026-06-02** against Databricks Model Serving (local Python ke
 
 **Observations:**
 - All three in-scope alerts were classified and returned valid MITRE tactic/technique labels.
-- Z-score = 0.0 across all traces indicates `score_anomaly()` returned a baseline z-score below the
-  escalation gate (`z_score > 2.5 AND confidence > 0.7`), so no incidents were written.
+- Z-score = 0.0 across all traces in this June 2 run indicates `score_anomaly()` returned a baseline
+  z-score below the escalation gate, so no incidents were written *at that time*.
 - Mean latency: **~13.2 s/trace** (dominated by credential_access at 26.2 s; steady-state ~6-7 s).
-- Root cause: Gold baseline table did not contain rows for the test host IPs at run time (Sai action item).
+- Root cause — **found and fixed (2026-06-11)**: historical injection spikes inflated the 24-h
+  `baseline_mean`/`baseline_std`, crushing every z-score toward 0. `score_anomaly()` was rebuilt with a
+  **p90-filtered robust baseline** (per-minute counts above the 90th percentile are excluded from the
+  baseline statistics), the agent's anomaly window was widened to 60 min, and the deployed gate set to
+  `z > 1.5` with a MANUAL_REVIEW escape hatch.
+
+**Live production results (as of 2026-06-11, ~18:20 UTC):** the scheduled pipeline has written
+**20 incidents** to `gold.incident` and **14 structural quality grades** to `gold.incident_eval` —
+real agent escalations, not seeded rows. Sample incident: host `WS5`, tactic `INITIAL_ACCESS`
+(`T1190`), severity `HIGH`, z-score `1.99`, confidence `0.80`, written by
+`databricks-meta-llama-3-3-70b-instruct`. Uncertain classifications on anomalous hosts are routed to
+`MANUAL_REVIEW` (e.g. `WS5`, z `1.89`) rather than dropped, and the eval agent grades each ticket
+(typical grades B/C, quality scores 0.6–0.8).
 
 ---
 
@@ -531,7 +550,7 @@ Results from `docs/eval_artifacts/` (mock provider with seeded z-scores). This i
 | MITRE tactic agreement (vs each other) | 100 % | 100 % |
 | True positives escalated | 3 / 3 | 3 / 3 |
 
-**Recommendation:** Model A (Llama-3.3-70B, temp=0.0). Both models achieve 100 % tactic agreement and escalate every true positive. Model A's higher mean confidence (0.85 vs. 0.78) provides a larger margin above the 0.70 escalation gate, reducing false-negative risk on borderline alerts. Deterministic temperature makes outputs reproducible for audit. See detailed commentary in `soc_agent.ipynb` Step 6.
+**Recommendation:** Model A (Llama-3.3-70B, temp=0.0). Both models achieve 100 % tactic agreement and escalate every true positive. Model A's higher mean confidence (0.85 vs. 0.78) provides a larger margin above the 0.70 escalation gate, reducing false-negative risk on borderline alerts. Deterministic temperature makes outputs reproducible for audit. See detailed commentary in `local_run/05_evaluation.ipynb`.
 
 ## Team TODO
 
@@ -574,7 +593,7 @@ The video is the largest single rubric item and nothing has been recorded yet. A
 
 ### 🟡 Important — Sai (DE)
 
-- [ ] **[Sai — DE]** Investigate why `score_anomaly()` returns z_score = 0.0 for all live traces — Gold baseline table likely missing rows for the test host IPs. Note: mock-mode results are the canonical submission artifact, but this should be explained in the video.
+- [x] **[Sai — DE]** ~~Investigate why `score_anomaly()` returns z_score = 0.0 for all live traces~~ — **RESOLVED 2026-06-11**: historical injection spikes had inflated the 24-h baseline mean/std; `score_anomaly()` rebuilt with a p90-filtered robust baseline and the agent's window widened to 60 min. Live incidents now flow (see Live Evaluation Results). Worth a mention in video Section 8 (deviations/lessons).
 
 ---
 
@@ -587,16 +606,16 @@ The video is the largest single rubric item and nothing has been recorded yet. A
 
 ### ✅ Completed
 
-- [x] **[Sai — DE]** Bronze → Silver → Gold ETL pipeline (`soc_etl_pipeline.ipynb`)
+- [x] **[Sai — DE]** Bronze → Silver → Gold ETL pipeline (`databricks_src/02_soc_etl_pipeline.py`)
 - [x] **[Sai — DE]** Unity Catalog functions: `score_anomaly()`, `classify_threat()`, `get_exposed_assets()`
 - [x] **[Marston — AIE]** LangGraph ReAct agent with `StateGraph`, scope guard, tool nodes, MITRE classification
 - [x] **[Marston — AIE]** `src/soc_agent/` reusable package (config, mocks, gold_tools, llm, agent, eval_helpers)
 - [x] **[Marston — AIE]** Dual-LLM evaluation harness with MLflow tracing (5 scenarios, same-trace comparison)
 - [x] **[Marston — AIE]** 5 trace examples captured — 3 escalations + 2 OOS rejections (`docs/eval_artifacts/`)
 - [x] **[Marston — AIE]** Same-trace 2-LLM comparison (Llama-3.1-70B vs DBRX) with summary table
-- [x] **[Marston — AIE]** Written evaluation commentary in `soc_agent.ipynb` Step 6 (observations, comparison, OOS, deployment recommendation)
+- [x] **[Marston — AIE]** Written evaluation commentary in `local_run/05_evaluation.ipynb` (observations, comparison, OOS, deployment recommendation)
 - [x] **[Marston — AIE]** Live evaluation results documented in README (Model A, Model B, OOS traces)
-- [x] **[Marston — AIE]** Out-of-scope query rejection tested — 2 explicit examples in `soc_agent.ipynb` Step 5
+- [x] **[Marston — AIE]** Out-of-scope query rejection tested — 2 explicit examples in `local_run/03_agent_loop.ipynb`
 - [x] **[Marston — AIE]** API client wrappers: VirusTotal, Shodan, NVD (mock-safe, retries, timeouts)
 - [x] **[Marston — AIE]** Mermaid architecture diagrams added to README (notebook pipeline + agent ReAct loop)
 - [x] **[Marston — AIE]** OOS rejection message quality confirmed — clear refusal text verified
