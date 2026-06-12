@@ -501,6 +501,7 @@ docs/
   aie_writeup.md                  ← AIE component summary for the team report
   eval_artifacts/                 ← trace + comparison CSVs (generated)
   business_case.md                ← Marquise (PM)
+  roi_calculation.md              ← ROI derivation + sensitivity analysis
 requirements.txt                  ← local Python deps
 .env.example                      ← config template (copy to .env)
 proposal_cybersecurity_agent.pdf
