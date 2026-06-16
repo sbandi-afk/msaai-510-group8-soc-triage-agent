@@ -18,22 +18,28 @@ The agent follows a ReAct-style design pattern. It reasons about the current ale
 
 The main tools include:
 
-- `score_anomaly()` for z-score anomaly detection against a host baseline.
-- `check_ip_reputation()` for IP reputation enrichment. The live Databricks deployment uses AbuseIPDB through a governed Unity Catalog SQL function, while the local package uses VirusTotal as the API client (mocked by default).
-- `lookup_exposed_ports()` for governed Shodan exposed-port and service-banner context.
+- `score_anomaly()` for z-score anomaly detection against a per-host rolling baseline, using a p90-filtered robust method that excludes historical spikes.
+- `check_ip_reputation()` for IP reputation enrichment. The live Databricks deployment uses AbuseIPDB through a governed Unity Catalog SQL function backed by `http_request()` over a host-locked HTTP connection, while the local package uses a VirusTotal Python wrapper (mocked by default).
+- `lookup_exposed_ports()` for governed Shodan exposed-port and service-banner context, also delivered through a Unity Catalog SQL function with `http_request()`.
 - `get_cve_context()` for NVD CVE enrichment.
 
-After tool enrichment, the agent routes to the `classify_and_ticket` node for LLM-driven MITRE ATT&CK classification and incident ticket generation.
+The gold layer also includes two additional Unity Catalog functions that support the pipeline but are not called directly by the ReAct tool-selection loop: `classify_threat()`, a rule-based Python UDF that maps EventID and process signatures to MITRE ATT&CK tactic/technique/confidence, and `get_exposed_assets()`, a table-valued function that returns host-level risk flags based on hostname patterns.
+
+After tool enrichment, the agent routes to the `classify_and_ticket` graph node, which uses the LLM to produce a MITRE ATT&CK classification and generates an incident ticket when the escalation criteria are met.
 
 The agent also includes a scope guard that rejects out-of-scope requests before calling an LLM or tool. This is by design — the agent does not behave like a general chatbot. It stays focused on SOC triage tasks, such as anomaly scoring, host enrichment, CVE context, and MITRE ATT&CK incident ticketing. The implementation also includes a maximum tool iteration cap, structured JSON output enforcement, prompt-injection defenses, and a manual review fallback when classification is uncertain or invalid.
 
 Human analysts remain in the loop. The goal is not to replace SOC analysts or allow the agent to close high-risk incidents automatically. The purpose is to reduce repetitive front-end triage work so analysts can review better tickets, validate escalations, and make final security decisions faster.
+
+The project also includes a one-command demonstration script (`demo_attack.py`) that injects a simulated credential brute-force attack into the silver table, triggers the live agent job, polls it to completion, and reveals the resulting incident and quality evaluation grade. This demonstrates end-to-end pipeline readiness beyond the scheduled hourly cadence.
 
 ## 3. Use Case Justification
 
 This use case is justified because SOC triage is repetitive, time-sensitive, and high impact. Analysts are most valuable when they are validating risk, deciding how to respond, and handling incidents that require human judgment. However, the first layer of triage often involves repeatable work that an agent can perform consistently, such as checking whether a host is anomalous, enriching the event with threat intelligence, reviewing CVE context, classifying behavior, and drafting a ticket.
 
 Our current design is stronger than the initial scope because it now has a live Databricks deployment path. The updated design includes an idempotent infrastructure setup notebook, a scheduled mock event injector, an incremental ETL pipeline, a live SOC agent notebook, and a separate incident quality evaluation notebook. This means the system is not only a local prototype; it demonstrates how the workflow can run as scheduled Databricks jobs.
+
+The design was further strengthened after a real production-style issue was discovered and resolved during deployment. The original `score_anomaly()` function produced z-scores of zero for all hosts because historical injection spikes had inflated the 24-hour baseline mean and standard deviation. The function was rebuilt with a p90-filtered robust baseline that excludes per-minute event counts above the 90th percentile from the baseline statistics. This fix was identified through live monitoring, implemented in the Unity Catalog function, and validated through the scheduled pipeline — demonstrating the kind of iterative improvement cycle that justifies a build approach.
 
 The use case is also a good fit for an agentic design because the correct next action depends on intermediate results. A static rule-only workflow may not know whether an alert needs anomaly scoring, IP reputation, exposed-port context, CVE lookup, or manual review. The ReAct loop gives the agent a way to gather context step by step and stop once it has enough information to classify the event.
 
@@ -49,7 +55,14 @@ We will build this SOC triage agent for the prototype and controlled pilot stage
 
 Buying a commercial platform could provide mature features, vendor support, service-level agreements, and prebuilt integrations. That may be useful later if NovaPay needs broad enterprise coverage or vendor-managed operations. However, a commercial tool may also introduce additional platform costs, ingestion costs, storage costs, and customization limits. It may not be tuned to our specific telemetry, SOC workflow, or payments-related threat priorities.
 
-Building the agent gives us more control. We can define the escalation logic, choose the LLM configuration, decide how external enrichment is called, and keep incident data inside our Databricks environment. The updated implementation strengthens our case for building internally because it uses Unity Catalog functions and governed HTTP connections for AbuseIPDB and Shodan, with API keys handled through Databricks secrets instead of being hardcoded in notebooks.
+Building the agent gives us more control. We can define the escalation logic, choose the LLM configuration, decide how external enrichment is called, and keep incident data inside our Databricks environment. The updated implementation strengthens our case for building internally because it uses Unity Catalog functions and governed HTTP connections for AbuseIPDB and Shodan, with API keys handled through Databricks secrets instead of being hardcoded in notebooks. Notably, the enrichment functions are implemented as SQL functions using `http_request()` over host-locked HTTP connections rather than Python UDFs, because Unity Catalog Python UDFs run in a network-sandboxed environment that cannot reach the internet. This architectural choice demonstrates the depth of platform-specific knowledge that a build approach provides.
+
+Additional build advantages include:
+
+- **Modular reusable package.** The agent logic is organized into a `src/soc_agent/` Python package with separate modules for configuration, mocking, API clients, gold-layer tools, LLM selection, agent orchestration, and evaluation helpers. This modularity makes components independently testable and replaceable.
+- **Automated test coverage.** The implementation includes a `pytest` test suite covering escalation gate boundary conditions, scope guard behavior, and mock fixture validation. For a security-critical system, this test infrastructure strengthens confidence in correctness.
+- **Infrastructure-as-code deployment.** The `deploy_jobs` notebook (and a companion `deploy_jobs.ps1` PowerShell script for local-admin deployment) is self-locating, idempotent, and creates all five scheduled jobs from a fresh git checkout with no hardcoded paths.
+- **Fully env-configurable LLM.** Provider and model names are selected entirely through environment variables (`LLM_PROVIDER`, `LLM_MODEL`, `LLM_MODEL_B`), supporting Databricks Model Serving, OpenAI, or a creds-free mock provider with zero code changes. This means the agent can be pointed at future models without modifying the codebase.
 
 Building internally does require more ownership. We will need to maintain the scheduled jobs, validate the data pipeline, monitor model behavior, review incident quality, and manage external API quotas. However, for this stage, building is the better choice because it gives us a working proof of concept, a clearer understanding of our own data, and a safer path to a controlled production pilot.
 
@@ -100,7 +113,7 @@ Total first-year project cost = $76,000
 
 This cost is small compared with the estimated manual triage labor pool of about $400,000 per year. The project does not need to replace analysts or automate all alert handling to create value. It only needs to reduce enough repetitive triage work to offset the first-year implementation and operating cost.
 
-These planning figures are anchored to measured system behavior rather than hypothetical throughput. As of June 11, 2026, the deployed pipeline has ingested **52,043 raw events** into Bronze, normalized **41,570 events** into Silver, and written **20 incidents** to `gold.incident` (15 HIGH severity; 9 routed to manual review), with **14 structural quality evaluations** in `gold.incident_eval` averaging a **0.757 quality score**. That is an escalation rate of roughly **0.05% of normalized events** — the agent absorbs the alert noise and surfaces a short, enriched queue for analysts. The full derivation and sensitivity analysis are in [`docs/roi_calculation.md`](roi_calculation.md).
+These planning figures are anchored to measured system behavior rather than hypothetical throughput. As of June 11, 2026 (the most recent live query), the deployed pipeline has ingested **52,043 raw events** into Bronze, normalized **41,570 events** into Silver, and written **20 incidents** to `gold.incident` (15 HIGH severity; 9 routed to manual review), with **14 structural quality evaluations** in `gold.incident_eval` averaging a **0.757 quality score**. That is an escalation rate of roughly **0.05% of normalized events** — the agent absorbs the alert noise and surfaces a short, enriched queue for analysts. These counts will continue to grow as the pipeline runs on its staggered hourly cadence (`mock_event_injector_v2` at :00, `soc_etl_pipeline_v2` at :10, `soc_agent_live` at :20, `incident_eval_agent_v2` at :25:30). The full derivation and sensitivity analysis are in [`docs/roi_calculation.md`](roi_calculation.md).
 
 ## 6. Analyst Cost, Alerts per Shift, and MTTD/MTTR Improvement
 
@@ -164,9 +177,9 @@ The buy option may still be useful as a future benchmark. Once we measure actual
 
 ## 8. LLM ROI Comparison
 
-Our agent compares two LLM configurations on the same alert context. The live Databricks deployment uses `databricks-meta-llama-3-3-70b-instruct` as both Model A and Model B, differentiated by temperature. Model A runs at temperature `0.0` and writes incidents when the escalation gate is met. Model B runs at temperature `0.5` and is used for comparison only. The local package defaults to `databricks-meta-llama-3-1-70b-instruct` (Model A) and `databricks-dbrx-instruct` (Model B), both configurable via environment variables.
+Our agent compares two LLM configurations on the same alert context. The live Databricks deployment uses `databricks-meta-llama-3-3-70b-instruct` as both Model A and Model B, differentiated by temperature. Model A runs at temperature `0.0` and writes incidents when the escalation gate is met. Model B runs at temperature `0.5` and is used for comparison only. The local package defaults to `databricks-meta-llama-3-1-70b-instruct` (Model A) and `databricks-dbrx-instruct` (Model B), but all model selections are fully configurable via environment variables (`LLM_PROVIDER`, `LLM_MODEL`, `LLM_MODEL_B`) with no code changes required. The `get_llm()` factory supports Databricks Model Serving, OpenAI, and a creds-free `mock` provider.
 
-This comparison is useful because it separates production action from evaluation. Model A is deterministic and better suited for auditability, while Model B allows the team to observe whether a more variable configuration changes confidence, tactic selection, or decision quality. The agent logs these results to MLflow so the team can compare z-score, confidence, latency, decision, tactic agreement, and whether an incident was written.
+This comparison is useful because it separates production action from evaluation. Model A is deterministic and better suited for auditability, while Model B allows the team to observe whether a more variable configuration changes confidence, tactic selection, or decision quality. The agent logs these results to MLflow (experiment: `/Shared/msaai-510-group8-soc-triage-agent/soc_triage_agent`) so the team can compare z-score, confidence, latency, decision, tactic agreement, and whether an incident was written. Each host triage run is recorded as a separate MLflow run with structured params, metrics, and tags.
 
 From a business perspective, the recommended model is Model A because deterministic behavior is more appropriate for SOC triage. In a security workflow, reproducibility matters. Analysts and auditors should be able to understand why an incident was created and expect similar inputs to produce similar outputs.
 
@@ -176,23 +189,23 @@ For production approval, we will calculate cost per triage run for both configur
 
 ## 9. Deployment Recommendation
 
-We will deploy in a phased Databricks pilot, not an immediate full-production rollout. Our current implementation is closer to deployment than our initial design because it now includes live Databricks notebooks, scheduled jobs, governed external enrichment, MLflow tracking, synthetic event injection, incremental ETL, and structural incident evaluation.
+We have deployed in a phased Databricks pilot, not an immediate full-production rollout. Our current implementation has moved beyond design into an operational state: live Databricks notebooks, scheduled jobs running on a staggered hourly cadence, governed external enrichment, MLflow tracking, synthetic event injection, incremental ETL, and structural incident evaluation are all active.
 
 ![Deployment Phases](images/deployment_phases.png)
 
-Phase 1 is infrastructure validation. We will run `setup_infrastructure` to create the catalog, schemas, Gold tables, Unity Catalog functions, governed HTTP connections, and incident evaluation table. This confirms that the environment is reproducible from a fresh checkout and that secrets are not hardcoded.
+Phase 1 (complete) is infrastructure validation. We ran `00_setup_infrastructure` to create the catalog, schemas, Gold tables, Unity Catalog functions, governed HTTP connections, and incident evaluation table. This confirmed that the environment is reproducible from a fresh checkout and that secrets are not hardcoded.
 
-After infrastructure is in place, the `deploy_jobs` notebook creates and schedules all five Databricks jobs (`setup_infrastructure`, `mock_event_injector`, `soc_etl_pipeline`, `soc_agent_live`, and `incident_eval_agent`). This notebook is idempotent and auto-detects its repo location, so no hardcoded paths or external CLI tools are required.
+After infrastructure was in place, the `deploy_jobs` notebook (`deploy_jobs.py`, with a companion `deploy_jobs.ps1` PowerShell script for local-admin deployment) created and scheduled all five Databricks jobs (`setup_infrastructure`, `mock_event_injector_v2`, `soc_etl_pipeline_v2`, `soc_agent_live`, and `incident_eval_agent_v2`). This notebook is idempotent and auto-detects its repo location, so no hardcoded paths or external CLI tools are required.
 
-Phase 2 is pipeline validation. The `mock_event_injector` will generate synthetic SIEM events into Bronze, and the scheduled ETL pipeline will normalize those events into Silver. This validates the full Bronze-to-Silver path and confirms that the agent is not only working on static fixtures.
+Phase 2 (complete) is pipeline validation. The `mock_event_injector_v2` generates synthetic SIEM events into Bronze on its hourly schedule, and the `soc_etl_pipeline_v2` normalizes those events into Silver. This validated the full Bronze-to-Silver path and confirmed that the agent is not only working on static fixtures.
 
-Phase 3 is shadow-mode agent execution. The `soc_agent_live` job will run on a schedule, review active hosts, call live Databricks tools, compare both LLM configurations, and log results to MLflow. In this phase, generated incidents will be reviewed by humans before they are treated as operationally actionable.
+Phase 3 (active) is shadow-mode agent execution. The `soc_agent_live` job runs on a schedule, reviews active hosts, calls live Databricks tools, compares both LLM configurations, and logs results to MLflow. Generated incidents are reviewed by humans before they are treated as operationally actionable.
 
-Phase 4 is incident quality evaluation. The `incident_eval_agent` will evaluate new incidents for valid MITRE tactic, valid technique format, valid confidence range, valid severity, and z-score threshold compliance. This gives the team a second layer of quality control and helps determine whether the agent is producing analyst-ready tickets.
+Phase 4 (active) is incident quality evaluation. The `incident_eval_agent_v2` evaluates new incidents for valid MITRE tactic, valid technique format, valid confidence range, valid severity, and z-score threshold compliance. This gives the team a second layer of quality control and helps determine whether the agent is producing analyst-ready tickets.
 
-Phase 5 is limited production pilot. Once we validate that the anomaly baseline is stable, the escalation gate is working, and incident quality is acceptable, we will run the agent alongside our SOC workflow. Analysts will approve or reject agent-generated tickets, and those decisions will be used to tune thresholds and measure actual time savings.
+Phase 5 (upcoming) is limited production pilot. Once we validate that the anomaly baseline is stable, the escalation gate is working, and incident quality is acceptable, we will run the agent alongside our SOC workflow. Analysts will approve or reject agent-generated tickets, and those decisions will be used to tune thresholds and measure actual time savings.
 
-We will proceed with a controlled Databricks pilot using Model A as the incident-writing configuration, Model B as the comparison configuration, and human analysts as the final decision-makers.
+We are proceeding with a controlled Databricks pilot using Model A as the incident-writing configuration, Model B as the comparison configuration, and human analysts as the final decision-makers.
 
 ## 10. Limitations
 
@@ -209,5 +222,13 @@ The fifth limitation is that `get_cve_context()` remains a direct NVD REST call 
 The sixth limitation is that LLM-generated classifications still require oversight. Our system includes structured output expectations, manual review fallback, incident evaluation, and human-in-the-loop review, but an LLM can still misclassify behavior or produce inconsistent summaries. The system is designed to support analysts, not replace them.
 
 The seventh limitation is cost uncertainty. The DBU estimate is based on planning assumptions, not a final production billing export. Before deployment, we will calculate actual DBU usage, model serving cost, external API cost, and analyst review time saved.
+
+The eighth limitation is interface drift between the shipped gold-layer functions and the original proposal contract. The `score_anomaly()` function was shipped as a table-valued function with window specified in minutes (`p_window_min INT`) rather than the originally proposed scalar function with window in days. The agent-side tool wrappers adapt to the shipped reality, but this means the codebase has adaptation layers that would need to be maintained if the gold layer changes again.
+
+The ninth limitation is a schema difference between the local and live `gold.incident` tables. The live Databricks deployment includes a `model_used` column that tracks which LLM generated each classification, while the local `src/soc_agent/` package does not write this column. This means local mock-mode incidents and live incidents have slightly different schemas.
+
+The tenth limitation is a threshold mismatch between the escalation gate and the quality evaluation. The agent escalates incidents when `z_score > 1.5`, but the `incident_eval_agent` grades z-score validity using a stricter threshold of `z_score >= 2.5`. This means incidents with z-scores between 1.5 and 2.5 are correctly escalated by the agent but receive a z-score penalty in the quality evaluation, which contributes to the average quality score of 0.757 rather than a higher figure. This discrepancy is intentional (the eval applies a stricter bar than the escalation gate), but it should be understood when interpreting quality grades.
+
+The eleventh limitation is the absence of incident deduplication. The agent processes every host with recent events on each hourly run. If a host remains anomalous across multiple consecutive runs (for example, during a sustained attack that produces high z-scores for several hours), the agent will create a new incident each time because there is no check for an existing open incident (`resolved_at IS NULL`) for the same host before writing. In production, this would generate duplicate incidents for persistent threats and inflate the analyst review queue. A deduplication check or cooldown window would be needed before full production use.
 
 Overall, our SOC triage agent is ready to support a controlled pilot. It addresses a clear business problem, has a working Databricks deployment path, measurable ROI assumptions, and governance controls. However, full production deployment should wait until we validate real data behavior, incident quality, API reliability, and analyst acceptance.
