@@ -607,7 +607,7 @@ Results from `docs/eval_artifacts/` (mock provider with seeded z-scores). This i
 
 The video is the largest single rubric item and nothing has been recorded yet. All sections are required; all team members must appear on camera.
 
-- [ ] **[Marquise — PM]** Write `docs/business_case.md` — ROI narrative, manual analyst cost baseline, build-vs-buy justification for NovaPay *(required for video Section 6)*
+- [x] **[Marquise — PM]** Write `docs/business_case.md` — ROI narrative, manual analyst cost baseline, build-vs-buy justification for NovaPay *(required for video Section 6)*
 - [ ] **[Marston — AIE]** Fill in `_working/roi_calculation.md` — plug in real numbers: Model A/B confidence (0.85 / 0.78), latency (728 ms / 735 ms), estimated Databricks DBU cost per trace, annual net value and ROI for each model *(required for video Section 6 — explicit LLM ROI comparison)*
 - [ ] **[All]** Assign speaker sections in `_working/video_outline.md` (PM/DE/AIE lines at the bottom of that file are blank)
 - [ ] **[All]** Prepare slide/visual assets for video: architecture diagram (exists in README), data pipeline evidence, trace screenshots or CSV table, evaluation summary table, ROI comparison slide, rejection-example clips, deployment recommendation slide
@@ -627,12 +627,6 @@ The video is the largest single rubric item and nothing has been recorded yet. A
 ### 🔴 Blocking — Academic Integrity (required for submission)
 
 - [ ] **[All]** Complete `_working/ai_usage_disclosure.md` — list every AI tool used (GitHub Copilot, ChatGPT, etc.), what each contributed, which artifacts it touched, and how team members verified the output. Required by the academic integrity policy; Turnitin is enabled.
-
----
-
-### 🔴 Blocking — Marquise (PM deliverables)
-
-- [ ] **[Marquise — PM]** Write `docs/business_case.md` — analyst hourly cost × alerts per shift × MTTD/MTTR improvement → annual savings; build-vs-buy comparison; cost estimate using Databricks DBU pricing
 
 ---
 
@@ -664,7 +658,7 @@ The video is the largest single rubric item and nothing has been recorded yet. A
 - [x] **[Marston — AIE]** API client wrappers: VirusTotal, Shodan, NVD (mock-safe, retries, timeouts)
 - [x] **[Marston — AIE]** Mermaid architecture diagrams added to README (notebook pipeline + agent ReAct loop)
 - [x] **[Marston — AIE]** OOS rejection message quality confirmed — clear refusal text verified
-
+- [x] **[Marquise — PM]** Write `docs/business_case.md`
 ## References
 
 1. Yao, S., Zhao, J., Yu, D., Du, N., Shafran, I., Narasimhan, K., & Cao, Y. (2022). ReAct: Synergizing Reasoning and Acting in Language Models. *arXiv preprint arXiv:2210.03629*. https://arxiv.org/abs/2210.03629
