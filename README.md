@@ -317,10 +317,12 @@ Full instructions (env vars, switching to live Databricks, selecting LLM
 provider/models) are in **[`docs/SETUP.md`](docs/SETUP.md)**. AIE component
 summary: **[`docs/aie_writeup.md`](docs/aie_writeup.md)**.
 
-### Business Case (Marquise Oliver — PM) ⏳ In Progress
+### Business Case (Marquise Oliver — PM) ✅ Complete
 
 - ROI calculation for automated triage vs. manual analyst workflow
 - Build-vs-buy justification for NovaPay Financial
+- Analyst cost baseline, MTTD/MTTR improvement framing
+- Deployment recommendation with phased pilot plan
 
 ---
 
