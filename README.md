@@ -626,7 +626,7 @@ The video is the largest single rubric item and nothing has been recorded yet. A
 
 ### 🔴 Blocking — Academic Integrity (required for submission)
 
-- [ ] **[All]** Complete `_working/ai_usage_disclosure.md` — list every AI tool used (GitHub Copilot, ChatGPT, etc.), what each contributed, which artifacts it touched, and how team members verified the output. Required by the academic integrity policy; Turnitin is enabled.
+- [ ] **[All]** Complete `docs/ai_usage_disclosure.md` — list every AI tool used (GitHub Copilot, ChatGPT, etc.), what each contributed, which artifacts it touched, and how team members verified the output. Required by the academic integrity policy; Turnitin is enabled.
 
 ---
 
