@@ -59,13 +59,15 @@ This document discloses all uses of generative AI tools by each team member duri
 
 ## Sai Bandi — Data Engineer
 
+### 1. Claude (Anthropic)
+
 | Detail | Description |
 |--------|-------------|
-| **Tool(s)** | *(To be completed by Sai)* |
-| **Purpose** | |
-| **Artifacts Touched** | |
-| **How It Was Used** | |
-| **Verification** | |
+| **Tool** | Claude (Anthropic) |
+| **Purpose** | Authoring assistance for data engineering pipeline code and notebook structure |
+| **Artifacts Touched** | `databricks_src/00_setup_infrastructure.py`, `databricks_src/02_soc_etl_pipeline.py`,`databricks_src/04_incident_eval_agent.py`,`databricks_src/01_mock_event_injector.py`, Unity Catalog UDF definitions |
+| **How It Was Used** | Claude was used to assist with drafting Unity Catalog SQL and UDF definitions, structuring the ETL pipeline logic, and debugging data transformation code in the Databricks notebooks. It also provided suggestions for schema design and data validation patterns. |
+| **Verification** | All AI-assisted code was reviewed, tested, and validated by me in the Databricks environment before inclusion in the project. Logic, schema choices, and pipeline architecture decisions were made independently. AI output was treated as a draft starting point, not a final artifact. |
 
 ---
 
@@ -77,7 +79,7 @@ This document discloses all uses of generative AI tools by each team member duri
 | Marquise Oliver | Google Gemini | Business logo and chart/graph generation for `business_case.md` | Yes — visual assets | Cross-checked against source data and ROI calculations |
 | Marquise Oliver | Microsoft Copilot | Presentation video theme layout and slide design recommendations | Partial — layout and sequencing suggestions | Team review of all slides; content authored independently |
 | Marston Ward | *(To be completed)* | | | |
-| Sai Bandi | *(To be completed)* | | | |
+| Sai Bandi | Claude (Anthropic) | Data pipeline authoring — UDF definitions, ETL structure, Mock Event generator and Eval Agent | Yes — code drafts | Author review, testing, and validation in Databricks |
 
 ---
 
